@@ -1,0 +1,14 @@
+# Environment Variables (PENTING)
+.env.local
+.env*.local
+
+# Dependencies & Build
+node_modules/
+.next/
+out/
+build/
+dist/
+
+# OS Files
+.DS_Store
+Thumbs.db

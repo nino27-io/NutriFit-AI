@@ -1,0 +1,22 @@
+import type { Metadata } from 'next';
+import './globals.css';
+
+export const metadata: Metadata = {
+  title: 'NutriFit AI — Pendamping Kesehatan & Kebugaran Personal',
+  description:
+    'Analisis komposisi tubuh, kebutuhan kalori harian, dan panduan kebugaran berbasis AI.',
+};
+
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
+  return (
+    <html lang="id">
+      <body className="min-h-screen bg-slate-50 text-slate-900">
+        {children}
+      </body>
+    </html>
+  );
+}
