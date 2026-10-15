@@ -15,6 +15,7 @@ import { CountUp } from '@/components/motion/CountUp';
 import { DashboardCharts } from '@/components/motion/DashboardCharts';
 import { ServiceCard } from '@/components/ServiceCard';
 import { ResourceCard } from '@/components/ResourceCard';
+import { InlineTitleIcon } from '@/components/InlineTitleIcon';
 
 const SERVICES = [
   {
@@ -76,13 +77,7 @@ export default function DashboardPage() {
                 <h1 className="text-hero-shadow mt-5 text-5xl font-extrabold uppercase leading-[0.98] tracking-tight text-white sm:text-6xl">
                   <span className="block">CERDAS</span>
                   <span className="my-1 flex items-center gap-3">
-                    <Image
-                      src="/images/nuvica-inline-title.webp"
-                      alt=""
-                      width={52}
-                      height={52}
-                      className="h-11 w-11 shrink-0 drop-shadow-md sm:h-13 sm:w-13"
-                    />
+                    <InlineTitleIcon className="h-11 w-11 sm:h-13 sm:w-13" />
                     <span>BUGAR</span>
                   </span>
                   <span className="block">TERUKUR</span>

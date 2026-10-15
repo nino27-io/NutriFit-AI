@@ -1,5 +1,6 @@
 'use client';
 
+import { InlineTitleIcon } from '@/components/InlineTitleIcon';
 import React, { useEffect, useState, useMemo } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
@@ -1009,7 +1010,7 @@ export default function ResultPage() {
       <section className="relative overflow-hidden bg-gradient-to-b from-[#A8CDF0] via-[#CFE4F9] to-[#EEF5FC] pt-6 pb-12">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           {/* Baris Navigasi Atas */}
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="no-print flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2.5">
               <Link
                 href="/input"
@@ -1052,13 +1053,7 @@ export default function ResultPage() {
               <h1 className="mt-4 text-3xl font-extrabold tracking-tight text-[#0B2545] sm:text-4xl lg:text-5xl">
                 CETAK BIRU KEBUGARAN{' '}
                 <span className="inline-flex items-center gap-2 align-middle">
-                  <Image
-                    src="/images/nuvica-inline-title.webp"
-                    alt=""
-                    width={48}
-                    height={48}
-                    className="inline-block h-10 w-10 rounded-2xl object-cover shadow-md sm:h-12 sm:w-12"
-                  />
+                  <InlineTitleIcon className="h-11 w-11 sm:h-13 sm:w-13" />
                   <span className="text-[#0B4B84] uppercase">
                     {userInput.name ? userInput.name : 'PERSONAL'}
                   </span>
@@ -1454,7 +1449,7 @@ export default function ResultPage() {
       </section>
 
       {/* FILTER NAVIGASI RENCANA AKSI 7 HARI */}
-      <section className="mx-auto mt-10 max-w-7xl px-4 sm:px-6 lg:px-8">
+      <section className="no-print mx-auto mt-10 max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="flex flex-wrap items-center justify-between gap-4 rounded-[2rem] border border-white bg-white/85 p-4 shadow-sm backdrop-blur-md">
           <div className="flex items-center gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-full bg-[#38D46A] text-[#0B2545]">
@@ -1683,7 +1678,7 @@ export default function ResultPage() {
       )}
 
       {/* BAGIAN 5: REKOMENDASI BACAAN TERKAIT (MENGGUNAKAN ASET ARTIKEL .WEBP) */}
-      <section className="mx-auto mt-8 max-w-7xl px-4 sm:px-6 lg:px-8">
+      <section className="no-print mx-auto mt-8 max-w-7xl px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between">
           <div>
             <span className="text-xs font-extrabold tracking-wider text-[#0B4B84] uppercase">

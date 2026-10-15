@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import { InlineTitleIcon } from '@/components/InlineTitleIcon';
+import React, { useState, useMemo, useEffect } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -174,6 +175,11 @@ export default function InputPage() {
   const [form, setForm] = useState<NutriFitInputData>(DEFAULT_FORM);
   const [activeSection, setActiveSection] = useState<ActiveSection>('body');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isMounted, setIsMounted] = useState(false);
+
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
 
   const updateField = <K extends keyof NutriFitInputData>(
     key: K,
@@ -181,7 +187,7 @@ export default function InputPage() {
   ) => {
     setForm((prev) => ({ ...prev, [key]: value }));
   };
-
+  
   const applyPreset = (presetType: 'male_cut' | 'female_fit') => {
     if (presetType === 'male_cut') {
       setForm({
@@ -332,6 +338,21 @@ export default function InputPage() {
 
   const showcase = SECTION_SHOWCASE[activeSection];
 
+  if (!isMounted) {
+    return (
+      <main className="min-h-screen bg-[#EEF5FC] pb-20 text-[#0B2545]">
+        <div className="mx-auto max-w-7xl animate-pulse px-4 pt-12 sm:px-6 lg:px-8">
+          <div className="h-9 w-40 rounded-full bg-white/80" />
+          <div className="mt-6 h-12 w-2/3 rounded-2xl bg-white/80" />
+          <div className="mt-8 grid grid-cols-1 gap-8 lg:grid-cols-12">
+            <div className="h-[520px] rounded-[2rem] bg-white/80 lg:col-span-7" />
+            <div className="h-[520px] rounded-[2rem] bg-white/80 lg:col-span-5" />
+          </div>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="min-h-screen bg-[#EEF5FC] pb-20 text-[#0B2545]">
       {/* Bagian Header / Banner Atas Senada Hero Dashboard Nuvica */}
@@ -390,13 +411,7 @@ export default function InputPage() {
             <h1 className="mt-4 text-3xl font-extrabold tracking-tight text-[#0B2545] sm:text-4xl lg:text-5xl">
               INPUT DATA TUBUH &{' '}
               <span className="inline-flex items-center gap-2 align-middle">
-                <Image
-                  src="/images/nuvica-inline-title.webp"
-                  alt=""
-                  width={48}
-                  height={48}
-                  className="inline-block h-10 w-10 rounded-2xl object-cover shadow-md sm:h-12 sm:w-12"
-                />
+                <InlineTitleIcon className="h-11 w-11 sm:h-13 sm:w-13" />
                 <span className="text-[#0B4B84]">TARGET BUGAR</span>
               </span>
             </h1>
@@ -414,6 +429,8 @@ export default function InputPage() {
       <section className="mx-auto -mt-4 max-w-7xl px-4 sm:px-6 lg:px-8">
         <form
           onSubmit={handleSubmit}
+          autoComplete="off"
+          suppressHydrationWarning
           className="grid grid-cols-1 gap-8 lg:grid-cols-12 lg:items-start"
         >
           {/* KOLOM KIRI (7 Kolom): Formulir Multi-Seksi */}
