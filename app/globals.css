@@ -2,6 +2,66 @@
 @tailwind components;
 @tailwind utilities;
 
+html {
+  scroll-behavior: smooth;
+}
+
 body {
-  @apply bg-slate-50 text-slate-900 antialiased;
+  background-color: #EEF5FC;
+  color: #0B2545;
+  font-family: var(--font-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Latar Langit Biru Nuvica (mendukung teks judul Putih di kiri atas) */
+.bg-nuvica-hero {
+  background:
+    radial-gradient(circle at 22% 32%, #86B9EA 0%, rgba(134, 185, 234, 0.45) 34%, rgba(238, 245, 252, 0) 68%),
+    radial-gradient(circle at 52% 28%, #B2D4F5 0%, rgba(178, 212, 245, 0.35) 42%, rgba(238, 245, 252, 0) 72%),
+    linear-gradient(180deg, #B8D6F3 0%, #DFEEFB 58%, #F4F9FE 100%);
+}
+
+/* Bayangan lembut pada teks putih di Hero agar selalu terbaca jelas */
+.text-hero-shadow {
+  text-shadow: 0 4px 20px rgba(11, 55, 102, 0.18);
+}
+
+/* Animasi Mengambang Halus (Hanya Transform) */
+@keyframes floatSlow {
+  0%, 100% {
+    transform: translate3d(0, 0, 0);
+  }
+  50% {
+    transform: translate3d(0, -8px, 0);
+  }
+}
+
+.animate-float-slow {
+  animation: floatSlow 4.5s ease-in-out infinite;
+}
+
+.animate-float-delayed {
+  animation: floatSlow 5.2s ease-in-out 1.2s infinite;
+}
+
+/* WAJIB: Matikan seluruh animasi & transisi jika pengguna mengaktifkan Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .animate-float-slow,
+  .animate-float-delayed {
+    animation: none !important;
+    transform: none !important;
+  }
 }
