@@ -10,6 +10,7 @@ export interface GoogleAccountProfile {
   loggedInAt: string;
   subscriptionInvoice?: string;
   subscribedAt?: string;
+  expiresAt?: string;
 }
 
 export interface AssessmentInputSnapshot {
@@ -148,8 +149,13 @@ export class HistoryRepository {
 }
 
 export class AuthTierController {
-  private static readonly AUTH_STORAGE_KEY = 'nutrifit_auth_session_v1';
+  private static readonly AUTH_STORAGE_KEY = 'nutrifit_auth_session_v2';
   private static readonly EVENT_NAME = 'nutrifit-auth-changed';
+
+  // Kunci versi baru (V2) untuk memutus status langganan uji coba/sandbox lama
+  private static getPremiumKey(email: string): string {
+    return `nutrifit_premium_prod_v2_${email.trim().toLowerCase()}`;
+  }
 
   public static getSession(): {
     tier: UserTier;
@@ -183,7 +189,13 @@ export class AuthTierController {
     const cleanName = name.trim() || 'Pengguna NutriFit';
     const cleanEmail = email.trim().toLowerCase();
 
-    const premiumKey = `nutrifit_premium_status_${cleanEmail}`;
+    // Hapus sisa cache uji coba V1 jika masih ada di browser
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem(`nutrifit_premium_status_${cleanEmail}`);
+      localStorage.removeItem('nutrifit_auth_session_v1');
+    }
+
+    const premiumKey = this.getPremiumKey(cleanEmail);
     const savedPremiumRaw =
       typeof window !== 'undefined' ? localStorage.getItem(premiumKey) : null;
     const savedPremium = savedPremiumRaw ? JSON.parse(savedPremiumRaw) : null;
@@ -195,22 +207,36 @@ export class AuthTierController {
       .slice(0, 2)
       .toUpperCase();
 
-    const tier: UserTier = savedPremium?.active ? 'premium' : 'free_registered';
+    // Cek apakah langganan aktif & belum kedaluwarsa
+    let isCurrentlyActive = false;
+    if (savedPremium?.active) {
+      if (savedPremium.expiresAt) {
+        isCurrentlyActive = new Date(savedPremium.expiresAt).getTime() > Date.now();
+      } else {
+        isCurrentlyActive = true;
+      }
+    }
+
+    const tier: UserTier = isCurrentlyActive ? 'premium' : 'free_registered';
     const user: GoogleAccountProfile = {
       name: cleanName,
       email: cleanEmail,
       picture: picture || undefined,
       avatarInitials: initials || 'NF',
       loggedInAt: new Date().toISOString(),
-      subscriptionInvoice: savedPremium?.invoice,
-      subscribedAt: savedPremium?.subscribedAt,
+      subscriptionInvoice: isCurrentlyActive ? savedPremium?.invoice : undefined,
+      subscribedAt: isCurrentlyActive ? savedPremium?.subscribedAt : undefined,
+      expiresAt: isCurrentlyActive ? savedPremium?.expiresAt : undefined,
     };
 
     this.saveSession({ tier, user });
     return { tier, user };
   }
 
-  public static activatePremiumSubscription(paymentMethod: string): {
+  public static activatePremiumSubscription(
+    paymentMethod: string,
+    durationDays = 7
+  ): {
     tier: UserTier;
     user: GoogleAccountProfile | null;
   } {
@@ -220,25 +246,31 @@ export class AuthTierController {
     }
 
     const invoice = `INV-NF-${Date.now().toString().slice(-6)}`;
-    const subscribedAt = new Date().toLocaleDateString('id-ID', {
+    const now = new Date();
+    const subscribedAt = now.toLocaleDateString('id-ID', {
       day: '2-digit',
       month: 'long',
       year: 'numeric',
     });
 
+    const expireDate = new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000);
+    const expiresAt = expireDate.toISOString();
+
     const updatedUser: GoogleAccountProfile = {
       ...current.user,
       subscriptionInvoice: `${invoice} (${paymentMethod})`,
       subscribedAt,
+      expiresAt,
     };
 
     if (typeof window !== 'undefined') {
       localStorage.setItem(
-        `nutrifit_premium_status_${current.user.email}`,
+        this.getPremiumKey(current.user.email),
         JSON.stringify({
           active: true,
           invoice: updatedUser.subscriptionInvoice,
           subscribedAt,
+          expiresAt,
         })
       );
     }
@@ -248,23 +280,37 @@ export class AuthTierController {
     return nextState;
   }
 
-  public static cancelPremiumForDemo(): void {
+  /**
+   * Reset status langganan kembali ke Free Registered secara instan untuk pengujian
+   */
+  public static resetSubscriptionStatus(email?: string): void {
     const current = this.getSession();
-    if (!current.user) return;
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem(`nutrifit_premium_status_${current.user.email}`);
+    const targetEmail = (email || current.user?.email || '').trim().toLowerCase();
+
+    if (typeof window !== 'undefined' && targetEmail) {
+      localStorage.removeItem(this.getPremiumKey(targetEmail));
+      localStorage.removeItem(`nutrifit_premium_status_${targetEmail}`);
     }
-    const updatedUser: GoogleAccountProfile = {
-      ...current.user,
-      subscriptionInvoice: undefined,
-      subscribedAt: undefined,
-    };
-    this.saveSession({ tier: 'free_registered', user: updatedUser });
+
+    if (current.user) {
+      const updatedUser: GoogleAccountProfile = {
+        ...current.user,
+        subscriptionInvoice: undefined,
+        subscribedAt: undefined,
+        expiresAt: undefined,
+      };
+      this.saveSession({ tier: 'free_registered', user: updatedUser });
+    }
+  }
+
+  public static cancelPremiumForDemo(): void {
+    this.resetSubscriptionStatus();
   }
 
   public static logout(): void {
     if (typeof window === 'undefined') return;
     localStorage.removeItem(this.AUTH_STORAGE_KEY);
+    localStorage.removeItem('nutrifit_auth_session_v1');
     window.dispatchEvent(new Event(this.EVENT_NAME));
   }
 

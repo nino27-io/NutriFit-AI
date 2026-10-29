@@ -1,0 +1,12 @@
+{
+  "NFSBOX-W7-MVTPE0KG-NHEY": {
+    "orderId": "NFSBOX-W7-MVTPE0KG-NHEY",
+    "email": "ulquiorracifer057@gmail.com",
+    "planId": "weekly",
+    "grossAmount": 5900,
+    "durationDays": 7,
+    "status": "pending",
+    "paymentType": "qris",
+    "createdAt": "2026-10-29T15:33:47.260Z"
+  }
+}

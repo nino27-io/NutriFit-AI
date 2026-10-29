@@ -363,8 +363,8 @@ export default function InputPage() {
     }
   };
 
-  const handleConfirmPayment = (paymentMethod: string) => {
-    AuthTierController.activatePremiumSubscription(paymentMethod);
+  const handleConfirmPayment = (paymentMethod: string, durationDays?: number) => {
+    AuthTierController.activatePremiumSubscription(paymentMethod, durationDays);
     setIsPaymentModalOpen(false);
     syncAuthSession();
   };

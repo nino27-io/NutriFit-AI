@@ -21,38 +21,12 @@ import {
   HistoryRecord,
   AccessPolicy,
 } from '@/lib/authTierService';
-
-type SubscriptionPlanId = 'weekly' | 'monthly';
-
-interface PlanOption {
-  id: SubscriptionPlanId;
-  title: string;
-  duration: string;
-  price: number;
-  priceFormatted: string;
-  badge?: string;
-  desc: string;
-}
-
-const PLAN_OPTIONS: PlanOption[] = [
-  {
-    id: 'weekly',
-    title: 'Langganan Mingguan',
-    duration: 'Aktif 7 Hari',
-    price: 4000,
-    priceFormatted: 'Rp4.000',
-    desc: 'Cocok untuk uji coba program nutrisi AI & latihan 1 minggu penuh.',
-  },
-  {
-    id: 'monthly',
-    title: 'Langganan Bulanan',
-    duration: 'Aktif 30 Hari',
-    price: 12000,
-    priceFormatted: 'Rp12.000',
-    badge: 'Lebih Hemat 25%',
-    desc: 'Setara Rp3.000/minggu untuk pemantauan komposisi tubuh sebulan penuh.',
-  },
-];
+import {
+  SubscriptionPlanId,
+  SUBSCRIPTION_PLAN_LIST,
+  STARTING_PRICE_TEXT,
+  getSubscriptionPlan,
+} from '@/lib/subscriptionConfig';
 
 interface AccountStatusBarProps {
   tier: UserTier;
@@ -131,9 +105,11 @@ export function AccountStatusBar({
           className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-[#EEF5FC] px-3.5 py-2 text-xs font-extrabold text-[#0B2545] transition hover:bg-[#DCEBF8]"
         >
           <History className="h-3.5 w-3.5 text-[#0B4B84]" />
-          {tier === 'guest'
-            ? 'Riwayat (Tidak Tercatat)'
-            : `Riwayat Akun (${historyCount})`}
+          <span>
+            {tier === 'guest'
+              ? 'Riwayat (Tidak Tercatat)'
+              : `Riwayat Akun (${historyCount})`}
+          </span>
         </button>
 
         {tier === 'guest' ? (
@@ -144,7 +120,7 @@ export function AccountStatusBar({
               className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-extrabold text-[#0B2545] shadow-sm transition hover:bg-slate-50"
             >
               <span className="font-black text-[#0B4B84]">G</span>
-              Masuk dengan Google
+              <span>Masuk dengan Google</span>
             </button>
             <button
               type="button"
@@ -152,7 +128,7 @@ export function AccountStatusBar({
               className="inline-flex items-center gap-1.5 rounded-full bg-[#05203C] px-4 py-2 text-xs font-extrabold text-[#38D46A] shadow-sm transition hover:bg-[#0B2545]"
             >
               <Sparkles className="h-3.5 w-3.5" />
-              Berlangganan (Mulai Rp4.000)
+              <span>Berlangganan (Mulai {STARTING_PRICE_TEXT})</span>
             </button>
           </>
         ) : null}
@@ -165,7 +141,7 @@ export function AccountStatusBar({
               className="inline-flex items-center gap-1.5 rounded-full bg-[#38D46A] px-4 py-2 text-xs font-extrabold text-[#0B2545] shadow-sm transition hover:brightness-95"
             >
               <Sparkles className="h-3.5 w-3.5" />
-              Upgrade Premium (Mulai Rp4.000)
+              <span>Upgrade Premium (Mulai {STARTING_PRICE_TEXT})</span>
             </button>
             <button
               type="button"
@@ -173,7 +149,7 @@ export function AccountStatusBar({
               className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-rose-600 hover:bg-rose-50"
             >
               <LogOut className="h-3.5 w-3.5" />
-              Keluar
+              <span>Keluar</span>
             </button>
           </>
         ) : null}
@@ -195,7 +171,7 @@ export function AccountStatusBar({
               className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-rose-600 hover:bg-rose-50"
             >
               <LogOut className="h-3.5 w-3.5" />
-              Keluar
+              <span>Keluar</span>
             </button>
           </>
         ) : null}
@@ -432,7 +408,7 @@ interface SubscriptionPaymentModalProps {
   isOpen: boolean;
   user: GoogleAccountProfile | null;
   onClose: () => void;
-  onConfirmPayment: (paymentMethod: string) => void;
+  onConfirmPayment: (paymentMethod: string, durationDays?: number) => void;
 }
 
 export function SubscriptionPaymentModal({
@@ -444,16 +420,62 @@ export function SubscriptionPaymentModal({
   const [selectedPlanId, setSelectedPlanId] =
     useState<SubscriptionPlanId>('weekly');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isVerifyingStatus, setIsVerifyingStatus] = useState(false);
+  const [pendingOrderId, setPendingOrderId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [infoMessage, setInfoMessage] = useState<string | null>(null);
 
   if (!isOpen || !user) return null;
 
-  const activePlan =
-    PLAN_OPTIONS.find((p) => p.id === selectedPlanId) ?? PLAN_OPTIONS[0];
+  const activePlan = getSubscriptionPlan(selectedPlanId);
+
+  /**
+   * Meminta backend memverifikasi ke server Midtrans apakah order_id benar-benar sudah 'settlement'
+   */
+  const verifyPaymentWithServer = async (orderIdToVerify: string) => {
+    setIsVerifyingStatus(true);
+    setErrorMessage(null);
+    setInfoMessage(null);
+
+    try {
+      const verifyRes = await fetch('/api/payment/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId: orderIdToVerify,
+          email: user.email,
+        }),
+      });
+
+      const verifyData = await verifyRes.json();
+
+      if (verifyRes.ok && verifyData.verified) {
+        setPendingOrderId(null);
+        setIsVerifyingStatus(false);
+        onConfirmPayment(
+          `${verifyData.planTitle} (${verifyData.priceFormatted}) • QRIS [${verifyData.orderId}]`,
+          verifyData.durationDays
+        );
+        return;
+      }
+
+      setIsVerifyingStatus(false);
+      setInfoMessage(
+        verifyData.message ||
+          'Pembayaran masih menunggu penyelesaian. Jika menggunakan Sandbox, silakan simulasikan pembayaran di Simulator QRIS Midtrans lalu klik tombol Cek Status di bawah.'
+      );
+    } catch {
+      setIsVerifyingStatus(false);
+      setErrorMessage(
+        'Gagal menghubungi server untuk memverifikasi status pembayaran.'
+      );
+    }
+  };
 
   const triggerMidtransQrisPayment = async () => {
     setIsProcessing(true);
     setErrorMessage(null);
+    setInfoMessage(null);
 
     try {
       const res = await fetch('/api/payment/snap-token', {
@@ -462,7 +484,7 @@ export function SubscriptionPaymentModal({
         body: JSON.stringify({
           name: user.name,
           email: user.email,
-          planId: selectedPlanId,
+          planId: activePlan.id,
         }),
       });
 
@@ -471,6 +493,8 @@ export function SubscriptionPaymentModal({
       if (!res.ok || !data.token) {
         throw new Error(data.error || 'Gagal menyiapkan transaksi QRIS.');
       }
+
+      setPendingOrderId(data.orderId);
 
       const snapScriptUrl: string =
         data.snapScriptUrl ||
@@ -530,26 +554,23 @@ export function SubscriptionPaymentModal({
       snapInstance.pay(data.token, {
         onSuccess: function () {
           setIsProcessing(false);
-          onConfirmPayment(
-            `${activePlan.title} (${activePlan.priceFormatted}) • QRIS`
-          );
+          // Wajib verifikasi ke server Midtrans sebelum mengaktifkan Premium!
+          verifyPaymentWithServer(data.orderId);
         },
         onPending: function () {
           setIsProcessing(false);
-          if (!data.isProduction) {
-            onConfirmPayment(
-              `${activePlan.title} (${activePlan.priceFormatted}) • QRIS`
-            );
-          } else {
-            setErrorMessage('Menunggu penyelesaian pembayaran QRIS Anda.');
-          }
+          // TIDAK ADA LAGI AUTO-APPROVE TANPA BAYAR!
+          verifyPaymentWithServer(data.orderId);
         },
         onError: function () {
           setIsProcessing(false);
-          setErrorMessage('Pembayaran QRIS gagal atau dibatalkan.');
+          setErrorMessage('Pembayaran QRIS gagal atau ditolak.');
         },
         onClose: function () {
           setIsProcessing(false);
+          setInfoMessage(
+            `Pop-up ditutup. Jika Anda sudah memindai dan membayar QRIS (Order ID: ${data.orderId}), tekan tombol "Verifikasi Status Pembayaran" di bawah.`
+          );
         },
       });
     } catch (err: unknown) {
@@ -575,25 +596,30 @@ export function SubscriptionPaymentModal({
 
         <div className="inline-flex items-center gap-2 rounded-full bg-[#EEF5FC] px-3 py-1 text-[11px] font-extrabold text-[#0B4B84]">
           <UserCheck className="h-3.5 w-3.5 text-[#38D46A]" />
-          Akun Google Terverifikasi: {user.email}
+          <span>Akun Google Terverifikasi: {user.email}</span>
         </div>
 
         <h3 className="mt-3 text-2xl font-extrabold tracking-tight text-[#0B2545]">
           Pilih Paket Langganan Premium
         </h3>
         <p className="mt-1 text-xs font-medium text-[#1E293B]">
-          Buka seluruh hasil analisis biometrik, program AI 7 hari, NutriCoach
-          AI, dan cetak PDF A4 tanpa batasan.
+          Status Premium hanya aktif otomatis setelah pembayaran QRIS
+          terverifikasi lunas oleh server Midtrans.
         </p>
 
         <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {PLAN_OPTIONS.map((plan) => {
+          {SUBSCRIPTION_PLAN_LIST.map((plan) => {
             const isSelected = selectedPlanId === plan.id;
             return (
               <button
                 key={plan.id}
                 type="button"
-                onClick={() => setSelectedPlanId(plan.id)}
+                onClick={() => {
+                  setSelectedPlanId(plan.id);
+                  setPendingOrderId(null);
+                  setInfoMessage(null);
+                  setErrorMessage(null);
+                }}
                 className={`relative flex flex-col justify-between rounded-2xl border-2 p-4 text-left transition ${
                   isSelected
                     ? 'border-[#05203C] bg-[#05203C] text-white shadow-md'
@@ -627,7 +653,7 @@ export function SubscriptionPaymentModal({
                       isSelected ? 'text-[#E0F2FE]' : 'text-[#0B4B84]'
                     }`}
                   >
-                    {plan.duration}
+                    {plan.durationText}
                   </span>
                 </div>
 
@@ -636,7 +662,7 @@ export function SubscriptionPaymentModal({
                     isSelected ? 'text-[#E0F2FE]' : 'text-[#1E293B]'
                   }`}
                 >
-                  {plan.desc}
+                  {plan.description}
                 </p>
               </button>
             );
@@ -669,7 +695,7 @@ export function SubscriptionPaymentModal({
           <div className="mt-3.5 space-y-1 border-t border-slate-200/80 pt-3 text-xs">
             <div className="flex justify-between font-semibold text-[#1E293B]">
               <span>
-                Harga {activePlan.title} ({activePlan.duration})
+                Harga {activePlan.title} ({activePlan.durationText})
               </span>
               <span>{activePlan.priceFormatted}</span>
             </div>
@@ -688,41 +714,46 @@ export function SubscriptionPaymentModal({
           </div>
         </div>
 
-        <ul className="mt-4 grid grid-cols-1 gap-1.5 text-xs font-semibold text-[#1E293B] sm:grid-cols-2">
-          <li className="flex items-center gap-1.5">
-            <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-[#38D46A]" />
-            BMI Asia-Pasifik, WHR & % Lemak US Navy
-          </li>
-          <li className="flex items-center gap-1.5">
-            <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-[#38D46A]" />
-            Generator Menu & Latihan AI 7 Hari
-          </li>
-          <li className="flex items-center gap-1.5">
-            <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-[#38D46A]" />
-            Chatbot Konsultasi NutriCoach AI 24/7
-          </li>
-          <li className="flex items-center gap-1.5">
-            <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-[#38D46A]" />
-            Kustomisasi Alergi & Cetak PDF A4
-          </li>
-        </ul>
+        {infoMessage ? (
+          <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-xs font-semibold text-amber-900">
+            {infoMessage}
+          </div>
+        ) : null}
 
         {errorMessage ? (
-          <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs font-semibold text-rose-700">
+          <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-3.5 text-xs font-semibold text-rose-700">
             {errorMessage}
           </div>
         ) : null}
 
+        {pendingOrderId ? (
+          <button
+            type="button"
+            disabled={isVerifyingStatus}
+            onClick={() => verifyPaymentWithServer(pendingOrderId)}
+            className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-full border-2 border-[#05203C] bg-white px-6 py-3 text-xs font-extrabold text-[#05203C] transition hover:bg-[#EEF5FC] disabled:opacity-60"
+          >
+            <CheckCircle2 className="h-4 w-4 text-[#0B4B84]" />
+            <span>
+              {isVerifyingStatus
+                ? 'Memeriksa Status ke Server Midtrans...'
+                : `Verifikasi Status Pembayaran (${pendingOrderId})`}
+            </span>
+          </button>
+        ) : null}
+
         <button
           type="button"
-          disabled={isProcessing}
+          disabled={isProcessing || isVerifyingStatus}
           onClick={triggerMidtransQrisPayment}
-          className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#38D46A] px-6 py-3.5 text-sm font-extrabold text-[#0B2545] shadow-lg transition hover:brightness-95 disabled:opacity-60"
+          className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#38D46A] px-6 py-3.5 text-sm font-extrabold text-[#0B2545] shadow-lg transition hover:brightness-95 disabled:opacity-60"
         >
           <ShieldCheck className="h-5 w-5" />
-          {isProcessing
-            ? 'Menyiapkan Kode QRIS Midtrans...'
-            : `Bayar ${activePlan.priceFormatted} dengan QRIS (Admin Rp0)`}
+          <span>
+            {isProcessing
+              ? 'Menyiapkan Kode QRIS Midtrans...'
+              : `Bayar ${activePlan.priceFormatted} dengan QRIS (Admin Rp0)`}
+          </span>
         </button>
       </div>
     </div>
@@ -813,7 +844,7 @@ export function HistoryModal({
                 className="inline-flex items-center gap-1 text-rose-600 hover:underline"
               >
                 <Trash2 className="h-3.5 w-3.5" />
-                Hapus Riwayat
+                <span>Hapus Riwayat</span>
               </button>
             </div>
 

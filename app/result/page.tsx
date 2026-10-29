@@ -262,8 +262,8 @@ export default function ResultPage() {
     }
   };
 
-  const handleConfirmPayment = (paymentMethod: string) => {
-    AuthTierController.activatePremiumSubscription(paymentMethod);
+  const handleConfirmPayment = (paymentMethod: string, durationDays?: number) => {
+    AuthTierController.activatePremiumSubscription(paymentMethod, durationDays);
     setIsPaymentModalOpen(false);
     syncAuthSessionOnly();
   };
@@ -590,8 +590,8 @@ export default function ResultPage() {
 
                   <p className="mt-2 text-xs leading-relaxed text-[#E0F2FE] sm:text-sm">
                     {tier === 'guest'
-                      ? 'Sebagai Pengunjung (Guest), Anda hanya melihat Berat Ideal serta Kalori & Protein. Login Google terlebih dahulu, lalu aktifkan langganan QRIS (mulai Rp4.000/minggu bebas biaya admin).'
-                      : `Halo ${authUser?.name}, riwayat Anda sudah tercatat di akun (${authUser?.email}). Aktifkan paket Mingguan (Rp4.000) atau Bulanan (Rp12.000) via QRIS untuk membuka seluruh fitur AI di bawah ini.`}
+                      ? 'Sebagai Pengunjung (Guest), Anda hanya melihat Berat Ideal serta Kalori & Protein. Login Google terlebih dahulu, lalu aktifkan langganan QRIS (mulai Rp5.900/minggu bebas biaya admin).'
+                      : `Halo ${authUser?.name}, riwayat Anda sudah tercatat di akun (${authUser?.email}). Aktifkan paket Mingguan (Rp5.900) atau Bulanan (Rp16.900) via QRIS untuk membuka seluruh fitur AI di bawah ini.`}
                   </p>
 
                   <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
@@ -603,8 +603,8 @@ export default function ResultPage() {
                       <Sparkles className="h-4 w-4" />
                       <span>
                         {tier === 'guest'
-                          ? 'Login Google & Berlangganan (Mulai Rp4.000)'
-                          : 'Pilih Paket QRIS (Mingguan Rp4.000 / Bulanan Rp12.000)'}
+                          ? 'Login Google & Berlangganan (Mulai Rp5.900)'
+                          : 'Pilih Paket QRIS (Mingguan Rp5.900 / Bulanan Rp16.900)'}
                       </span>
                     </button>
                   </div>

@@ -1,30 +1,11 @@
 import { NextResponse } from 'next/server';
 // @ts-expect-error midtrans-client tidak memiliki package types bawaan
 import midtransClient from 'midtrans-client';
-
-export type SubscriptionPlanId = 'weekly' | 'monthly';
-
-interface PlanConfig {
-  id: string;
-  label: string;
-  price: number;
-  durationLabel: string;
-}
-
-const SUBSCRIPTION_PLANS: Record<SubscriptionPlanId, PlanConfig> = {
-  weekly: {
-    id: 'nutrifit-qris-weekly',
-    label: 'Langganan Mingguan NutriFit AI (7 Hari)',
-    price: 4000,
-    durationLabel: '7 Hari (Mingguan)',
-  },
-  monthly: {
-    id: 'nutrifit-qris-monthly',
-    label: 'Langganan Bulanan NutriFit AI (30 Hari)',
-    price: 12000,
-    durationLabel: '30 Hari (Bulanan)',
-  },
-};
+import {
+  SubscriptionPlanId,
+  getSubscriptionPlan,
+} from '@/lib/subscriptionConfig';
+import { registerPendingTransaction } from '@/lib/paymentServerStore';
 
 function sanitizeKey(raw?: string): string {
   if (!raw) return '';
@@ -47,10 +28,14 @@ export async function POST(request: Request) {
       );
     }
 
-    const selectedPlan: PlanConfig =
-      planId && SUBSCRIPTION_PLANS[planId]
-        ? SUBSCRIPTION_PLANS[planId]
-        : SUBSCRIPTION_PLANS.weekly;
+    if (planId && planId !== 'weekly' && planId !== 'monthly') {
+      return NextResponse.json(
+        { error: 'Paket langganan tidak valid.' },
+        { status: 400 }
+      );
+    }
+
+    const selectedPlan = getSubscriptionPlan(planId);
 
     const serverKey = sanitizeKey(process.env.MIDTRANS_SERVER_KEY);
     const clientKey = sanitizeKey(process.env.NEXT_PUBLIC_MIDTRANS_CLIENT_KEY);
@@ -65,7 +50,6 @@ export async function POST(request: Request) {
       );
     }
 
-    // Cegah jika pengguna tidak sengaja menempelkan Client Key ke dalam MIDTRANS_SERVER_KEY
     if (serverKey.includes('-client-')) {
       return NextResponse.json(
         {
@@ -76,7 +60,6 @@ export async function POST(request: Request) {
       );
     }
 
-    // Deteksi otomatis: Jika berawalan "SB-", berarti Sandbox (false). Jika "Mid-", berarti Production (true).
     const isProduction = !serverKey.startsWith('SB-');
 
     const snap = new midtransClient.Snap({
@@ -85,39 +68,47 @@ export async function POST(request: Request) {
       clientKey: clientKey,
     });
 
-    const planCode = planId === 'monthly' ? 'BLN' : 'MGG';
-    const orderId = `NF-${planCode}-${Date.now().toString(36).toUpperCase()}`;
+    const envPrefix = isProduction ? 'NFPROD' : 'NFSBOX';
+    const randomSuffix = Math.random().toString(36).substring(2, 6).toUpperCase();
+    const orderId = `${envPrefix}-${selectedPlan.orderCode}-${Date.now().toString(36).toUpperCase()}-${randomSuffix}`;
 
     const baseParameter = {
       transaction_details: {
         order_id: orderId,
-        gross_amount: selectedPlan.price, // Murni Rp4.000 atau Rp12.000 (Biaya Admin Rp0)
+        gross_amount: selectedPlan.price,
       },
       item_details: [
         {
-          id: selectedPlan.id,
+          id: selectedPlan.itemId,
           price: selectedPlan.price,
           quantity: 1,
-          name: selectedPlan.label,
+          name: selectedPlan.invoiceLabel,
         },
       ],
       customer_details: {
-        first_name: name || 'Pengguna NutriFit',
-        email: email,
+        first_name: (name || 'Pengguna NutriFit').slice(0, 50),
+        email: email.trim().toLowerCase(),
       },
     };
 
     let transaction;
     try {
-      // Prioritaskan hanya metode pembayaran QRIS
       transaction = await snap.createTransaction({
         ...baseParameter,
         enabled_payments: ['other_qris', 'gopay'],
       });
     } catch {
-      // Fallback jika channel spesifik belum diaktifkan di dashboard Midtrans
       transaction = await snap.createTransaction(baseParameter);
     }
+
+    // Catat pesanan berstatus 'pending' di penyimpanan server
+    registerPendingTransaction({
+      orderId,
+      email,
+      planId: selectedPlan.id,
+      grossAmount: selectedPlan.price,
+      durationDays: selectedPlan.durationDays,
+    });
 
     const snapScriptUrl = isProduction
       ? 'https://app.midtrans.com/snap/snap.js'
@@ -127,8 +118,11 @@ export async function POST(request: Request) {
       token: transaction.token,
       redirect_url: transaction.redirect_url,
       orderId: orderId,
-      planLabel: selectedPlan.label,
+      planId: selectedPlan.id,
+      planLabel: selectedPlan.invoiceLabel,
+      durationDays: selectedPlan.durationDays,
       amount: selectedPlan.price,
+      priceFormatted: selectedPlan.priceFormatted,
       isProduction: isProduction,
       snapScriptUrl: snapScriptUrl,
       clientKey: clientKey,
@@ -142,7 +136,7 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           error:
-            'Midtrans 401 Unauthorized: Server Key ditolak oleh Midtrans. Pastikan Server Key di .env.local disalin utuh dari menu Settings -> Access Keys dan restart npm run dev.',
+            'Midtrans 401 Unauthorized: Server Key ditolak oleh Midtrans. Pastikan Server Key di .env.local sesuai dengan mode akun dan restart npm run dev.',
         },
         { status: 401 }
       );
