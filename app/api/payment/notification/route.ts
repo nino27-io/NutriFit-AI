@@ -10,9 +10,26 @@ function sanitizeKey(raw?: string): string {
   return raw.trim().replace(/^["']|["']$/g, '');
 }
 
+// Menangani ping tes atau verifikasi URL dari Midtrans
+export async function GET() {
+  return NextResponse.json({
+    status: 'OK',
+    message: 'NutriFit Midtrans Notification Webhook is active and reachable.',
+  });
+}
+
 export async function POST(request: Request) {
   try {
-    const payload = await request.json();
+    let payload: Record<string, unknown> = {};
+    try {
+      payload = await request.json();
+    } catch {
+      // Jika Midtrans mengirim body kosong saat tombol "Test notification URL" ditekan
+      return NextResponse.json({
+        status: 'OK',
+        message: 'Ping test acknowledged',
+      });
+    }
 
     const orderId = String(payload.order_id || '');
     const statusCode = String(payload.status_code || '');
@@ -22,11 +39,12 @@ export async function POST(request: Request) {
     const fraudStatus = String(payload.fraud_status || '');
     const paymentType = String(payload.payment_type || 'qris');
 
+    // Jika ini adalah payload uji coba dummy dari dashboard Midtrans
     if (!orderId || !signatureKey) {
-      return NextResponse.json(
-        { error: 'Payload notifikasi tidak lengkap.' },
-        { status: 400 }
-      );
+      return NextResponse.json({
+        status: 'OK',
+        message: 'Test notification received successfully',
+      });
     }
 
     const serverKey = sanitizeKey(process.env.MIDTRANS_SERVER_KEY);
@@ -37,7 +55,7 @@ export async function POST(request: Request) {
       );
     }
 
-    // 1. Verifikasi Signature Key SHA512 secara ketat
+    // 1. Verifikasi Signature Key SHA-512 resmi Midtrans
     const isValidSignature = verifyMidtransSignature(
       orderId,
       statusCode,
@@ -47,10 +65,11 @@ export async function POST(request: Request) {
     );
 
     if (!isValidSignature) {
-      console.error(`Webhook ditolak: Signature tidak valid untuk ${orderId}`);
+      console.warn(`Webhook: Signature key tidak valid untuk order ${orderId}`);
+      // Tetap kembalikan 200 OK agar Midtrans tidak melakukan retry spam, tapi jangan ubah status database
       return NextResponse.json(
-        { error: 'Invalid signature key' },
-        { status: 403 }
+        { status: 'IGNORED', message: 'Invalid signature key' },
+        { status: 200 }
       );
     }
 
@@ -61,12 +80,12 @@ export async function POST(request: Request) {
     const numericGross = Math.round(Number(grossAmount));
 
     if (numericGross !== expectedPlan.price) {
-      console.error(
-        `Webhook ditolak: Nominal ${numericGross} tidak sesuai harga paket ${expectedPlan.price}`
+      console.warn(
+        `Webhook: Nominal ${numericGross} tidak sesuai harga paket ${expectedPlan.price}`
       );
       return NextResponse.json(
-        { error: 'Gross amount mismatch' },
-        { status: 400 }
+        { status: 'IGNORED', message: 'Gross amount mismatch' },
+        { status: 200 }
       );
     }
 
