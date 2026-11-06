@@ -87,12 +87,19 @@ function sanitizeKey(raw?: string): string {
 }
 
 function cleanJsonString(raw: string): string {
-  return raw
+  const stripped = raw
     .trim()
     .replace(/^```json\s*/i, '')
     .replace(/^```\s*/i, '')
     .replace(/\s*```$/i, '')
     .trim();
+
+  const firstBrace = stripped.indexOf('{');
+  const lastBrace = stripped.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    return stripped.slice(firstBrace, lastBrace + 1);
+  }
+  return stripped;
 }
 
 async function callGeminiModel(
@@ -100,39 +107,50 @@ async function callGeminiModel(
   prompt: string,
   expectJson: boolean
 ): Promise<string> {
-  const models = ['gemini-3.5-flash-lite'];
+  const models = [
+    'gemini-2.5-flash',
+    'gemini-2.0-flash',
+    'gemini-1.5-flash',
+  ];
   let lastError = 'Gagal menghubungi server AI Gemini.';
 
   for (const modelName of models) {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ role: 'user', parts: [{ text: '' + prompt }] }],
-          generationConfig: expectJson
-            ? {
-                temperature: 0.3,
-                responseMimeType: 'application/json',
-              }
-            : {
-                temperature: 0.55,
-              },
-        }),
+    try {
+      const res = await fetch(
+        `[https://generativelanguage.googleapis.com/v1beta/models/$](https://generativelanguage.googleapis.com/v1beta/models/$){modelName}:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts: [{ text: String(prompt) }] }],
+            generationConfig: expectJson
+              ? {
+                  temperature: 0.25,
+                  responseMimeType: 'application/json',
+                }
+              : {
+                  temperature: 0.55,
+                },
+          }),
+        }
+      );
+
+      const data = await res.json();
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+      if (res.ok && text) {
+        return text;
       }
-    );
 
-    const data = await res.json();
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-
-    if (res.ok && text) {
-      return text;
+      lastError =
+        data?.error?.message ||
+        `Model ${modelName} mengembalikan status ${res.status}`;
+    } catch (err: unknown) {
+      lastError =
+        err instanceof Error
+          ? err.message
+          : `Gagal terhubung ke model ${modelName}`;
     }
-
-    lastError =
-      data?.error?.message ||
-      `Model ${modelName} mengembalikan status ${res.status}`;
   }
 
   throw new Error(lastError);
@@ -146,7 +164,7 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           error:
-            'GEMINI_API_KEY belum diatur di file .env.local. Masukkan API Key Gemini Anda lalu restart npm run dev agar AI dapat menghitung analisis biometrik.',
+            'GEMINI_API_KEY belum diatur di Environment Variables. Masukkan API Key Gemini Anda lalu jalankan ulang aplikasi.',
         },
         { status: 500 }
       );
@@ -169,9 +187,6 @@ export async function POST(request: Request) {
       userMessage?: string;
     };
 
-    // =========================================================================
-    // MODE 1: AI MENGHITUNG SELURUH ANALISIS BIOMETRIK, RUMUS, MENU & LATIHAN
-    // =========================================================================
     if (mode === 'generate_plan') {
       if (!rawInput) {
         return NextResponse.json(
@@ -295,9 +310,6 @@ Kembalikan HANYA objek JSON valid dengan skema persis berikut:
       return NextResponse.json(finalProgram);
     }
 
-    // =========================================================================
-    // MODE 2: CHATBOT KONSULTASI REAL-TIME DIJAWAB MURNI OLEH AI
-    // =========================================================================
     if (mode === 'chat') {
       const cleanQuestion = (userMessage || '').trim();
       if (!cleanQuestion) {

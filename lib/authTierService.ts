@@ -42,6 +42,13 @@ export interface HistoryRecord {
   };
 }
 
+interface StoredPremiumRecord {
+  active: boolean;
+  invoice?: string;
+  subscribedAt?: string;
+  expiresAt?: string;
+}
+
 export class AccessPolicy {
   public static canViewFullResult(tier: UserTier): boolean {
     return tier === 'premium';
@@ -152,9 +159,26 @@ export class AuthTierController {
   private static readonly AUTH_STORAGE_KEY = 'nutrifit_auth_session_v2';
   private static readonly EVENT_NAME = 'nutrifit-auth-changed';
 
-  // Kunci versi baru (V2) untuk memutus status langganan uji coba/sandbox lama
   private static getPremiumKey(email: string): string {
     return `nutrifit_premium_prod_v2_${email.trim().toLowerCase()}`;
+  }
+
+  private static getValidPremiumRecord(email: string): StoredPremiumRecord | null {
+    if (typeof window === 'undefined' || !email) return null;
+    try {
+      const raw = localStorage.getItem(this.getPremiumKey(email));
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as StoredPremiumRecord;
+      if (!parsed?.active) return null;
+
+      if (parsed.expiresAt) {
+        const isStillValid = new Date(parsed.expiresAt).getTime() > Date.now();
+        if (!isStillValid) return null;
+      }
+      return parsed;
+    } catch {
+      return null;
+    }
   }
 
   public static getSession(): {
@@ -169,6 +193,26 @@ export class AuthTierController {
       if (!raw) return { tier: 'guest', user: null };
       const parsed = JSON.parse(raw);
       if (!parsed?.user?.email) return { tier: 'guest', user: null };
+
+      const cleanEmail = String(parsed.user.email).trim().toLowerCase();
+      const premiumRecord = this.getValidPremiumRecord(cleanEmail);
+
+      if (premiumRecord) {
+        const syncedUser: GoogleAccountProfile = {
+          ...parsed.user,
+          email: cleanEmail,
+          subscriptionInvoice:
+            premiumRecord.invoice || parsed.user.subscriptionInvoice,
+          subscribedAt:
+            premiumRecord.subscribedAt || parsed.user.subscribedAt,
+          expiresAt: premiumRecord.expiresAt || parsed.user.expiresAt,
+        };
+        return {
+          tier: 'premium',
+          user: syncedUser,
+        };
+      }
+
       return {
         tier: parsed.tier === 'premium' ? 'premium' : 'free_registered',
         user: parsed.user,
@@ -189,16 +233,12 @@ export class AuthTierController {
     const cleanName = name.trim() || 'Pengguna NutriFit';
     const cleanEmail = email.trim().toLowerCase();
 
-    // Hapus sisa cache uji coba V1 jika masih ada di browser
     if (typeof window !== 'undefined') {
       localStorage.removeItem(`nutrifit_premium_status_${cleanEmail}`);
       localStorage.removeItem('nutrifit_auth_session_v1');
     }
 
-    const premiumKey = this.getPremiumKey(cleanEmail);
-    const savedPremiumRaw =
-      typeof window !== 'undefined' ? localStorage.getItem(premiumKey) : null;
-    const savedPremium = savedPremiumRaw ? JSON.parse(savedPremiumRaw) : null;
+    const savedPremium = this.getValidPremiumRecord(cleanEmail);
 
     const initials = cleanName
       .split(' ')
@@ -207,17 +247,9 @@ export class AuthTierController {
       .slice(0, 2)
       .toUpperCase();
 
-    // Cek apakah langganan aktif & belum kedaluwarsa
-    let isCurrentlyActive = false;
-    if (savedPremium?.active) {
-      if (savedPremium.expiresAt) {
-        isCurrentlyActive = new Date(savedPremium.expiresAt).getTime() > Date.now();
-      } else {
-        isCurrentlyActive = true;
-      }
-    }
-
+    const isCurrentlyActive = Boolean(savedPremium);
     const tier: UserTier = isCurrentlyActive ? 'premium' : 'free_registered';
+
     const user: GoogleAccountProfile = {
       name: cleanName,
       email: cleanEmail,
@@ -245,6 +277,7 @@ export class AuthTierController {
       return { tier: 'guest', user: null };
     }
 
+    const cleanEmail = current.user.email.trim().toLowerCase();
     const invoice = `INV-NF-${Date.now().toString().slice(-6)}`;
     const now = new Date();
     const subscribedAt = now.toLocaleDateString('id-ID', {
@@ -253,25 +286,29 @@ export class AuthTierController {
       year: 'numeric',
     });
 
-    const expireDate = new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000);
+    const expireDate = new Date(
+      now.getTime() + durationDays * 24 * 60 * 60 * 1000
+    );
     const expiresAt = expireDate.toISOString();
 
     const updatedUser: GoogleAccountProfile = {
       ...current.user,
+      email: cleanEmail,
       subscriptionInvoice: `${invoice} (${paymentMethod})`,
       subscribedAt,
       expiresAt,
     };
 
     if (typeof window !== 'undefined') {
+      const record: StoredPremiumRecord = {
+        active: true,
+        invoice: updatedUser.subscriptionInvoice,
+        subscribedAt,
+        expiresAt,
+      };
       localStorage.setItem(
-        this.getPremiumKey(current.user.email),
-        JSON.stringify({
-          active: true,
-          invoice: updatedUser.subscriptionInvoice,
-          subscribedAt,
-          expiresAt,
-        })
+        this.getPremiumKey(cleanEmail),
+        JSON.stringify(record)
       );
     }
 
@@ -280,31 +317,12 @@ export class AuthTierController {
     return nextState;
   }
 
-  /**
-   * Reset status langganan kembali ke Free Registered secara instan untuk pengujian
-   */
-  public static resetSubscriptionStatus(email?: string): void {
-    const current = this.getSession();
-    const targetEmail = (email || current.user?.email || '').trim().toLowerCase();
-
-    if (typeof window !== 'undefined' && targetEmail) {
-      localStorage.removeItem(this.getPremiumKey(targetEmail));
-      localStorage.removeItem(`nutrifit_premium_status_${targetEmail}`);
-    }
-
-    if (current.user) {
-      const updatedUser: GoogleAccountProfile = {
-        ...current.user,
-        subscriptionInvoice: undefined,
-        subscribedAt: undefined,
-        expiresAt: undefined,
-      };
-      this.saveSession({ tier: 'free_registered', user: updatedUser });
-    }
+  public static resetSubscriptionStatus(): void {
+    // Dinonaktifkan agar status pelanggan premium tetap terjaga secara permanen
   }
 
   public static cancelPremiumForDemo(): void {
-    this.resetSubscriptionStatus();
+    // Dinonaktifkan agar status pelanggan premium tidak kembali ke simulasi free
   }
 
   public static logout(): void {

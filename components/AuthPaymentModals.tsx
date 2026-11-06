@@ -14,12 +14,14 @@ import {
   Trash2,
   Calendar,
   AlertCircle,
+  Ticket,
 } from 'lucide-react';
 import {
   UserTier,
   GoogleAccountProfile,
   HistoryRecord,
   AccessPolicy,
+  AuthTierController,
 } from '@/lib/authTierService';
 import {
   SubscriptionPlanId,
@@ -27,6 +29,31 @@ import {
   STARTING_PRICE_TEXT,
   getSubscriptionPlan,
 } from '@/lib/subscriptionConfig';
+
+const USED_COUPONS_STORAGE_KEY = 'nutrifit_used_coupons_v2';
+
+function getLocalUsedCoupons(): Record<string, string> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem(USED_COUPONS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function markCouponUsedLocally(code: string, email: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const current = getLocalUsedCoupons();
+    current[code] = email;
+    localStorage.setItem(USED_COUPONS_STORAGE_KEY, JSON.stringify(current));
+  } catch {
+    // Abaikan jika storage penuh
+  }
+}
 
 interface AccountStatusBarProps {
   tier: UserTier;
@@ -47,135 +74,240 @@ export function AccountStatusBar({
   onClickSubscribe,
   onClickOpenHistory,
   onClickLogout,
-  onClickDowngradeDemo,
 }: AccountStatusBarProps) {
   const badge = AccessPolicy.getTierBadgeMeta(tier);
 
-  return (
-    <div className="no-print mb-6 flex flex-wrap items-center justify-between gap-3 rounded-[1.75rem] border border-white bg-white/90 px-5 py-3.5 shadow-sm backdrop-blur-md">
-      <div className="flex flex-wrap items-center gap-3">
-        {user ? (
-          user.picture ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={user.picture}
-              alt={user.name}
-              referrerPolicy="no-referrer"
-              className="h-10 w-10 rounded-full border border-slate-200 object-cover"
-            />
-          ) : (
-            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#05203C] text-xs font-extrabold text-[#38D46A]">
-              {user.avatarInitials}
-            </div>
-          )
-        ) : (
-          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#EEF5FC] text-[#0B4B84]">
-            <Lock className="h-4 w-4" />
-          </div>
-        )}
+  const [couponCode, setCouponCode] = useState('');
+  const [couponLoading, setCouponLoading] = useState(false);
+  const [couponFeedback, setCouponFeedback] = useState<{
+    type: 'success' | 'expired' | 'invalid';
+    text: string;
+  } | null>(null);
 
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span
-              className={`rounded-full px-3 py-0.5 text-[11px] font-extrabold ${badge.badgeClass}`}
-            >
-              {badge.label}
-            </span>
-            {user ? (
-              <span className="text-xs font-extrabold text-[#0B2545]">
-                {user.name} ({user.email})
+  const handleRedeemCoupon = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const normalizedCode = couponCode.trim().toUpperCase();
+    if (!normalizedCode || !user?.email) return;
+
+    setCouponLoading(true);
+    setCouponFeedback(null);
+
+    try {
+      const localUsed = getLocalUsedCoupons();
+      if (localUsed[normalizedCode]) {
+        setCouponFeedback({
+          type: 'expired',
+          text: 'Kupon sudah kedaluwarsa karena telah digunakan sebelumnya.',
+        });
+        return;
+      }
+
+      const res = await fetch('/api/subscription/coupon', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code: normalizedCode,
+          email: user.email,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!data.valid) {
+        if (data.status === 'EXPIRED') {
+          markCouponUsedLocally(normalizedCode, 'used');
+        }
+        setCouponFeedback({
+          type: data.status === 'EXPIRED' ? 'expired' : 'invalid',
+          text: data.message || 'Kode kupon tidak valid.',
+        });
+        return;
+      }
+
+      markCouponUsedLocally(normalizedCode, user.email);
+      setCouponCode('');
+      setCouponFeedback({
+        type: 'success',
+        text: data.message || 'Kupon berhasil diaktifkan!',
+      });
+
+      AuthTierController.activatePremiumSubscription(
+        `Token: ${data.code}`,
+        Number(data.durationDays) || 30
+      );
+    } catch {
+      setCouponFeedback({
+        type: 'invalid',
+        text: 'Gagal menghubungi server, silakan periksa koneksi Anda.',
+      });
+    } finally {
+      setCouponLoading(false);
+    }
+  };
+
+  return (
+    <div className="no-print mb-6 rounded-[1.75rem] border border-white bg-white/90 px-5 py-3.5 shadow-sm backdrop-blur-md">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          {user ? (
+            user.picture ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={user.picture}
+                alt={user.name}
+                referrerPolicy="no-referrer"
+                className="h-10 w-10 rounded-full border border-slate-200 object-cover"
+              />
+            ) : (
+              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#05203C] text-xs font-extrabold text-[#38D46A]">
+                {user.avatarInitials}
+              </div>
+            )
+          ) : (
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#EEF5FC] text-[#0B4B84]">
+              <Lock className="h-4 w-4" />
+            </div>
+          )}
+
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span
+                className={`rounded-full px-3 py-0.5 text-[11px] font-extrabold ${badge.badgeClass}`}
+              >
+                {badge.label}
               </span>
-            ) : null}
-            {tier === 'premium' && user?.subscriptionInvoice ? (
-              <span className="rounded-full bg-[#EEF5FC] px-2.5 py-0.5 text-[10px] font-extrabold text-[#0B4B84]">
-                {user.subscriptionInvoice}
-              </span>
-            ) : null}
+              {user ? (
+                <span className="text-xs font-extrabold text-[#0B2545]">
+                  {user.name} ({user.email})
+                </span>
+              ) : null}
+              {tier === 'premium' && user?.subscriptionInvoice ? (
+                <span className="rounded-full bg-[#EEF5FC] px-2.5 py-0.5 text-[10px] font-extrabold text-[#0B4B84]">
+                  {user.subscriptionInvoice}
+                </span>
+              ) : null}
+            </div>
+            <p className="mt-0.5 text-[11px] font-medium text-[#1E293B]">
+              {badge.description}
+            </p>
           </div>
-          <p className="mt-0.5 text-[11px] font-medium text-[#1E293B]">
-            {badge.description}
-          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={onClickOpenHistory}
+            className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-[#EEF5FC] px-3.5 py-2 text-xs font-extrabold text-[#0B2545] transition hover:bg-[#DCEBF8]"
+          >
+            <History className="h-3.5 w-3.5 text-[#0B4B84]" />
+            <span>
+              {tier === 'guest'
+                ? 'Riwayat (Tidak Tercatat)'
+                : `Riwayat Akun (${historyCount})`}
+            </span>
+          </button>
+
+          {tier === 'guest' ? (
+            <>
+              <button
+                type="button"
+                onClick={onClickLogin}
+                className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-extrabold text-[#0B2545] shadow-sm transition hover:bg-slate-50"
+              >
+                <span className="font-black text-[#0B4B84]">G</span>
+                <span>Masuk dengan Google</span>
+              </button>
+              <button
+                type="button"
+                onClick={onClickSubscribe}
+                className="inline-flex items-center gap-1.5 rounded-full bg-[#05203C] px-4 py-2 text-xs font-extrabold text-[#38D46A] shadow-sm transition hover:bg-[#0B2545]"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                <span>Berlangganan (Mulai {STARTING_PRICE_TEXT})</span>
+              </button>
+            </>
+          ) : null}
+
+          {tier === 'free_registered' ? (
+            <>
+              <button
+                type="button"
+                onClick={onClickSubscribe}
+                className="inline-flex items-center gap-1.5 rounded-full bg-[#38D46A] px-4 py-2 text-xs font-extrabold text-[#0B2545] shadow-sm transition hover:brightness-95"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                <span>Upgrade Premium (Mulai {STARTING_PRICE_TEXT})</span>
+              </button>
+              <button
+                type="button"
+                onClick={onClickLogout}
+                className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-rose-600 hover:bg-rose-50"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+                <span>Keluar</span>
+              </button>
+            </>
+          ) : null}
+
+          {tier === 'premium' ? (
+            <button
+              type="button"
+              onClick={onClickLogout}
+              className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-rose-600 hover:bg-rose-50"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+              <span>Keluar</span>
+            </button>
+          ) : null}
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={onClickOpenHistory}
-          className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-[#EEF5FC] px-3.5 py-2 text-xs font-extrabold text-[#0B2545] transition hover:bg-[#DCEBF8]"
-        >
-          <History className="h-3.5 w-3.5 text-[#0B4B84]" />
-          <span>
-            {tier === 'guest'
-              ? 'Riwayat (Tidak Tercatat)'
-              : `Riwayat Akun (${historyCount})`}
-          </span>
-        </button>
+      {/* KOLOM KODE TOKEN: HANYA MUNCUL JIKA SUDAH LOGIN GOOGLE & BELUM PREMIUM */}
+      {user && tier === 'free_registered' ? (
+        <div className="mt-3 border-t border-slate-200/80 pt-3">
+          <form
+            onSubmit={handleRedeemCoupon}
+            className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
+          >
+            <div className="flex items-center gap-2 text-xs font-extrabold text-[#0B2545]">
+              <Ticket className="h-4 w-4 text-[#0B4B84]" />
+              <span>Punya Kode Token Penguji / Kupon Demo?</span>
+            </div>
 
-        {tier === 'guest' ? (
-          <>
-            <button
-              type="button"
-              onClick={onClickLogin}
-              className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs font-extrabold text-[#0B2545] shadow-sm transition hover:bg-slate-50"
-            >
-              <span className="font-black text-[#0B4B84]">G</span>
-              <span>Masuk dengan Google</span>
-            </button>
-            <button
-              type="button"
-              onClick={onClickSubscribe}
-              className="inline-flex items-center gap-1.5 rounded-full bg-[#05203C] px-4 py-2 text-xs font-extrabold text-[#38D46A] shadow-sm transition hover:bg-[#0B2545]"
-            >
-              <Sparkles className="h-3.5 w-3.5" />
-              <span>Berlangganan (Mulai {STARTING_PRICE_TEXT})</span>
-            </button>
-          </>
-        ) : null}
-
-        {tier === 'free_registered' ? (
-          <>
-            <button
-              type="button"
-              onClick={onClickSubscribe}
-              className="inline-flex items-center gap-1.5 rounded-full bg-[#38D46A] px-4 py-2 text-xs font-extrabold text-[#0B2545] shadow-sm transition hover:brightness-95"
-            >
-              <Sparkles className="h-3.5 w-3.5" />
-              <span>Upgrade Premium (Mulai {STARTING_PRICE_TEXT})</span>
-            </button>
-            <button
-              type="button"
-              onClick={onClickLogout}
-              className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-rose-600 hover:bg-rose-50"
-            >
-              <LogOut className="h-3.5 w-3.5" />
-              <span>Keluar</span>
-            </button>
-          </>
-        ) : null}
-
-        {tier === 'premium' ? (
-          <>
-            {onClickDowngradeDemo ? (
-              <button
-                type="button"
-                onClick={onClickDowngradeDemo}
-                className="rounded-full border border-slate-200 bg-white px-3 py-2 text-[11px] font-bold text-[#1E293B] hover:bg-slate-100"
-              >
-                Simulasi Kembali ke Free
-              </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={onClickLogout}
-              className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-rose-600 hover:bg-rose-50"
-            >
-              <LogOut className="h-3.5 w-3.5" />
-              <span>Keluar</span>
-            </button>
-          </>
-        ) : null}
-      </div>
+            <div className="flex flex-col gap-1 sm:w-96">
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={couponCode}
+                  onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+                  placeholder="Masukkan Kode Token"
+                  className="flex-1 rounded-full border border-slate-300 bg-[#EEF5FC]/60 px-3.5 py-1.5 text-xs font-extrabold tracking-wider text-[#0B2545] uppercase placeholder-slate-400 focus:border-[#0B4B84] focus:bg-white focus:outline-none"
+                />
+                <button
+                  type="submit"
+                  disabled={couponLoading || !couponCode.trim()}
+                  className="rounded-full bg-[#05203C] px-4 py-1.5 text-xs font-extrabold text-[#38D46A] transition hover:bg-[#0B2545] disabled:opacity-50"
+                >
+                  {couponLoading ? 'Mengecek...' : 'Pakai Token'}
+                </button>
+              </div>
+              {couponFeedback ? (
+                <p
+                  className={`px-2 text-[11px] font-bold ${
+                    couponFeedback.type === 'success'
+                      ? 'text-emerald-600'
+                      : couponFeedback.type === 'expired'
+                        ? 'text-amber-600'
+                        : 'text-rose-600'
+                  }`}
+                >
+                  {couponFeedback.text}
+                </p>
+              ) : null}
+            </div>
+          </form>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -425,13 +557,73 @@ export function SubscriptionPaymentModal({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
 
+  const [couponCode, setCouponCode] = useState('');
+  const [couponLoading, setCouponLoading] = useState(false);
+  const [couponFeedback, setCouponFeedback] = useState<{
+    type: 'success' | 'expired' | 'invalid';
+    text: string;
+  } | null>(null);
+
   if (!isOpen || !user) return null;
 
   const activePlan = getSubscriptionPlan(selectedPlanId);
 
-  /**
-   * Meminta backend memverifikasi ke server Midtrans apakah order_id benar-benar sudah 'settlement'
-   */
+  const handleModalRedeemCoupon = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const normalizedCode = couponCode.trim().toUpperCase();
+    if (!normalizedCode) return;
+
+    setCouponLoading(true);
+    setCouponFeedback(null);
+
+    try {
+      const localUsed = getLocalUsedCoupons();
+      if (localUsed[normalizedCode]) {
+        setCouponFeedback({
+          type: 'expired',
+          text: 'Kupon sudah kedaluwarsa karena telah digunakan sebelumnya.',
+        });
+        return;
+      }
+
+      const res = await fetch('/api/subscription/coupon', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code: normalizedCode,
+          email: user.email,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!data.valid) {
+        if (data.status === 'EXPIRED') {
+          markCouponUsedLocally(normalizedCode, 'used');
+        }
+        setCouponFeedback({
+          type: data.status === 'EXPIRED' ? 'expired' : 'invalid',
+          text: data.message || 'Kode kupon tidak valid.',
+        });
+        return;
+      }
+
+      markCouponUsedLocally(normalizedCode, user.email);
+      setCouponCode('');
+      onConfirmPayment(
+        `Token: ${data.code}`,
+        Number(data.durationDays) || 30
+      );
+    } catch {
+      setCouponFeedback({
+        type: 'invalid',
+        text: 'Gagal menghubungi server, silakan periksa koneksi Anda.',
+      });
+    } finally {
+      setCouponLoading(false);
+    }
+  };
+
   const verifyPaymentWithServer = async (orderIdToVerify: string) => {
     setIsVerifyingStatus(true);
     setErrorMessage(null);
@@ -554,12 +746,10 @@ export function SubscriptionPaymentModal({
       snapInstance.pay(data.token, {
         onSuccess: function () {
           setIsProcessing(false);
-          // Wajib verifikasi ke server Midtrans sebelum mengaktifkan Premium!
           verifyPaymentWithServer(data.orderId);
         },
         onPending: function () {
           setIsProcessing(false);
-          // TIDAK ADA LAGI AUTO-APPROVE TANPA BAYAR!
           verifyPaymentWithServer(data.orderId);
         },
         onError: function () {
@@ -755,6 +945,44 @@ export function SubscriptionPaymentModal({
               : `Bayar ${activePlan.priceFormatted} dengan QRIS (Admin Rp0)`}
           </span>
         </button>
+
+        {/* INPUT TOKEN DI DALAM MODAL PEMBAYARAN */}
+        <div className="mt-5 border-t border-slate-200 pt-4">
+          <form onSubmit={handleModalRedeemCoupon} className="space-y-2">
+            <label className="block text-xs font-extrabold text-[#0B2545]">
+              Punya Kode Token Penguji / Kupon Demo?
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={couponCode}
+                onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+                placeholder="Masukkan Kode Token"
+                className="flex-1 rounded-xl border border-slate-300 bg-[#EEF5FC]/60 px-3.5 py-2 text-xs font-extrabold tracking-wider text-[#0B2545] uppercase focus:border-[#0B4B84] focus:bg-white focus:outline-none"
+              />
+              <button
+                type="submit"
+                disabled={couponLoading || !couponCode.trim()}
+                className="rounded-xl bg-[#05203C] px-4 py-2 text-xs font-extrabold text-[#38D46A] transition hover:bg-[#0B2545] disabled:opacity-50"
+              >
+                {couponLoading ? 'Mengecek...' : 'Pakai'}
+              </button>
+            </div>
+            {couponFeedback ? (
+              <p
+                className={`text-xs font-bold ${
+                  couponFeedback.type === 'success'
+                    ? 'text-emerald-600'
+                    : couponFeedback.type === 'expired'
+                      ? 'text-amber-600'
+                      : 'text-rose-600'
+                }`}
+              >
+                {couponFeedback.text}
+              </p>
+            ) : null}
+          </form>
+        </div>
       </div>
     </div>
   );
