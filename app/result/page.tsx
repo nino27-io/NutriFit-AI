@@ -114,6 +114,7 @@ export default function ResultPage() {
   }, []);
 
   // Fungsi memanggil AI untuk menghitung seluruh biometrik, rumus, menu & latihan
+  // Fungsi memanggil AI untuk menghitung seluruh biometrik, rumus, menu & latihan
   const runAiFullAnalysis = useCallback(
     async (
       inputPayload: RawUserBiometricInput,
@@ -121,7 +122,7 @@ export default function ResultPage() {
       forceRefresh = false
     ) => {
       const activePref = (prefOverride ?? customPreference).trim();
-      const cacheKey = `nutrifit_ai_calc_${JSON.stringify({
+      const cacheKey = `nutrifit_ai_calc_v3_${JSON.stringify({
         ...inputPayload,
         pref: activePref,
       })}`;
@@ -131,7 +132,13 @@ export default function ResultPage() {
         if (cached) {
           try {
             const parsedCache = JSON.parse(cached) as AiGeneratedProgram;
-            if (parsedCache?.biometrics && parsedCache?.weeklyMeals) {
+            if (
+              parsedCache?.biometrics &&
+              Array.isArray(parsedCache?.weeklyMeals) &&
+              parsedCache.weeklyMeals.length >= 7 &&
+              Array.isArray(parsedCache?.weeklyWorkouts) &&
+              parsedCache.weeklyWorkouts.length >= 7
+            ) {
               setAiProgram(parsedCache);
               setAiError(null);
               return;
