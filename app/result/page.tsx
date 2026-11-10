@@ -433,7 +433,7 @@ export default function ResultPage() {
           <div className="rounded-[2rem] border border-white bg-white p-10 text-center shadow-sm">
             <RefreshCw className="mx-auto h-10 w-10 animate-spin text-[#0B4B84]" />
             <h2 className="mt-4 text-xl font-extrabold text-[#0B2545]">
-              Gemini AI Sedang Menghitung Rumus Biometrik & Menyusun Kurikulum 7
+              Model AI Sedang Menghitung Rumus Biometrik & Menyusun Kurikulum 7
               Hari...
             </h2>
             <p className="mx-auto mt-2 max-w-xl text-xs text-[#1E293B]">
