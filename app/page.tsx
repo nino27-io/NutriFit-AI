@@ -363,32 +363,7 @@ export default function DashboardPage() {
       </section>
 
       {/* =====================================================================
-          5. CARA KERJA & GRAFIK ANIMASI CONTOH (Gaya Header "WE OFFER PRO DNA")
-      ===================================================================== */}
-      <section className="bg-white py-16 md:py-24">
-        <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
-          <Reveal>
-            <div className="mb-10 flex flex-col justify-between gap-3 sm:flex-row sm:items-end">
-              <div>
-                <span className="inline-block rounded-full bg-[#38D46A] px-3.5 py-1 text-[11px] font-extrabold uppercase tracking-wider text-slate-900">
-                  CARA KERJA & SIMULASI
-                </span>
-                <h2 className="mt-3 text-3xl font-extrabold uppercase tracking-tight text-[#0B2545] sm:text-4xl">
-                  VISUALISASI METRIK & RENCANA HARIAN
-                </h2>
-              </div>
-              <p className="text-xs font-semibold text-slate-500">
-                Data pada grafik di bawah adalah contoh tampilan edukatif
-              </p>
-            </div>
-          </Reveal>
-
-          <DashboardCharts />
-        </div>
-      </section>
-
-      {/* =====================================================================
-          6. SUMBER BELAJAR SECTION (id="sumber-belajar")
+          5. SUMBER BELAJAR SECTION (id="sumber-belajar")
       ===================================================================== */}
       <section
         id="sumber-belajar"
@@ -423,7 +398,7 @@ export default function DashboardPage() {
       </section>
 
       {/* =====================================================================
-          7. AJAKAN PENUTUP (CLOSING CTA)
+          6. AJAKAN PENUTUP (CLOSING CTA)
       ===================================================================== */}
       <section className="bg-white py-16 md:py-20">
         <div className="mx-auto max-w-5xl px-4 sm:px-6 lg:px-8">

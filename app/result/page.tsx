@@ -153,30 +153,31 @@ export default function ResultPage() {
       setAiError(null);
 
       try {
-        const res = await fetch('/api/ai/nutrifit', {
+        // TAHAP 1: Hitung Biometrik + Rumus + Hari Senin (~2,5 detik)
+        const resInitial = await fetch('/api/ai/nutrifit', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             mode: 'generate_plan',
+            planScope: 'initial',
             rawInput: inputPayload,
             customPreference: activePref,
           }),
         });
 
-        const data = await res.json();
-        if (!res.ok || !data?.biometrics) {
+        const initialData = await resInitial.json();
+        if (!resInitial.ok || !initialData?.biometrics) {
           throw new Error(
-            data?.error || 'Gagal menjalankan perhitungan analisis AI.'
+            initialData?.error || 'Gagal menjalankan perhitungan analisis AI.'
           );
         }
 
-        const programData = data as AiGeneratedProgram;
+        const programData = initialData as AiGeneratedProgram;
         setAiProgram(programData);
+        setAiError(null);
+        setIsGeneratingAi(false);
 
-        if (typeof window !== 'undefined') {
-          sessionStorage.setItem(cacheKey, JSON.stringify(programData));
-        }
-
+        // Simpan ke riwayat akun jika pengguna sudah login
         const session = AuthTierController.getSession();
         if (session.user && AccessPolicy.canRecordHistory(session.tier)) {
           const updated = HistoryRepository.saveRecord(
@@ -196,6 +197,85 @@ export default function ResultPage() {
           );
           setHistoryRecords(updated);
         }
+
+        // Jika hasil tahap 1 sudah lengkap 7 hari, langsung simpan ke cache
+        if (
+          programData.weeklyMeals?.length >= 7 &&
+          programData.weeklyWorkouts?.length >= 7
+        ) {
+          if (typeof window !== 'undefined') {
+            sessionStorage.setItem(cacheKey, JSON.stringify(programData));
+          }
+          return;
+        }
+
+        // TAHAP 2 (LATAR BELAKANG): Lengkapi jadwal Selasa – Minggu tanpa memblokir UI
+        const mondayMenuNames = (programData.weeklyMeals?.[0]?.meals || [])
+          .map((m) => m.title)
+          .join(', ');
+
+        fetch('/api/ai/nutrifit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            mode: 'generate_plan',
+            planScope: 'remaining_days',
+            rawInput: inputPayload,
+            computedBiometrics: programData.biometrics,
+            customPreference: activePref,
+            mondaySummary: mondayMenuNames,
+          }),
+        })
+          .then(async (resRemaining) => {
+            if (!resRemaining.ok) return null;
+            return (await resRemaining.json()) as {
+              weeklyMeals?: AiGeneratedProgram['weeklyMeals'];
+              weeklyWorkouts?: AiGeneratedProgram['weeklyWorkouts'];
+            };
+          })
+          .then((restData) => {
+            if (!restData) return;
+
+            const extraMeals = Array.isArray(restData.weeklyMeals)
+              ? restData.weeklyMeals.filter(
+                  (d) => d?.day?.toLowerCase() !== 'senin'
+                )
+              : [];
+
+            const extraWorkouts = Array.isArray(restData.weeklyWorkouts)
+              ? restData.weeklyWorkouts.filter(
+                  (d) => d?.day?.toLowerCase() !== 'senin'
+                )
+              : [];
+
+            if (extraMeals.length === 0 && extraWorkouts.length === 0) return;
+
+            setAiProgram((prev) => {
+              if (!prev) return prev;
+              const mergedProgram: AiGeneratedProgram = {
+                ...prev,
+                weeklyMeals:
+                  extraMeals.length > 0
+                    ? [...(prev.weeklyMeals || []).slice(0, 1), ...extraMeals]
+                    : prev.weeklyMeals,
+                weeklyWorkouts:
+                  extraWorkouts.length > 0
+                    ? [
+                        ...(prev.weeklyWorkouts || []).slice(0, 1),
+                        ...extraWorkouts,
+                      ]
+                    : prev.weeklyWorkouts,
+              };
+
+              if (typeof window !== 'undefined') {
+                sessionStorage.setItem(cacheKey, JSON.stringify(mergedProgram));
+              }
+              return mergedProgram;
+            });
+          })
+          .catch(() => {
+            // Abaikan error latar belakang agar hasil utama tetap tampil normal
+          });
       } catch (err: unknown) {
         const msg =
           err instanceof Error

@@ -118,17 +118,52 @@ export interface FullAiStructuredOutput {
   dynamic_analysis: AiDynamicAnalysis;
 }
 
+// ============================================================================
+// SERVER-SIDE MEMORY CACHE (Hemat Kuota API & Respons < 5ms untuk Input Sama)
+// ============================================================================
+interface CacheEntry {
+  expiresAt: number;
+  payload: unknown;
+}
+
+const PLAN_CACHE_TTL_MS = 30 * 60 * 1000; // 30 menit
+const MAX_CACHE_ENTRIES = 100;
+const serverPlanCache = new Map<string, CacheEntry>();
+
+function getCachedPlan(key: string): unknown | null {
+  const entry = serverPlanCache.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    serverPlanCache.delete(key);
+    return null;
+  }
+  return entry.payload;
+}
+
+function setCachedPlan(key: string, payload: unknown): void {
+  if (serverPlanCache.size >= MAX_CACHE_ENTRIES) {
+    const oldestKey = serverPlanCache.keys().next().value;
+    if (oldestKey) serverPlanCache.delete(oldestKey);
+  }
+  serverPlanCache.set(key, {
+    expiresAt: Date.now() + PLAN_CACHE_TTL_MS,
+    payload,
+  });
+}
+
+// ============================================================================
+// UTILITAS KEY & PEMBERSIH JSON
+// ============================================================================
 function sanitizeKey(raw?: string): string {
   if (!raw) return '';
   return raw.trim().replace(/^["']|["']$/g, '');
 }
 
-function parseApiKeys(raw?: string): string[] {
+function parseGeminiKeys(raw?: string): string[] {
   const candidates = [
     raw,
     process.env.GEMINI_API_KEY_2,
     process.env.GEMINI_API_KEY_3,
-    process.env.NEXT_PUBLIC_GEMINI_API_KEY,
   ]
     .filter(Boolean)
     .join(',');
@@ -161,55 +196,57 @@ function cleanJsonString(raw: string): string {
   return jsonSlice.replace(/\\(?!["\\/bfnrt]|u[0-9a-fA-F]{4})/g, '\\\\');
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
+// ============================================================================
+// SYSTEM INSTRUCTIONS PAKAR NUTRIFIT AI
+// ============================================================================
 const PLAN_SYSTEM_INSTRUCTION = `Anda adalah Mesin Komputasi Biometrik Klinis, Ahli Gizi Klinis, dan Pelatih Fisik di NutriFit AI Indonesia.
-Gunakan data mentah pengguna untuk menghitung seluruh parameter secara matematis, lalu buat analisis mendalam yang sangat spesifik terhadap profil unik pengguna ini. Jangan pernah menggunakan frasa generik atau template. Jelaskan alasan fisiologis dan matematis mengapa setiap angka muncul.
+Gunakan data mentah pengguna untuk menghitung seluruh parameter secara matematis, lalu buat analisis mendalam yang spesifik dan ringkas tanpa frasa generik.
 
 Aturan Komputasi Wajib:
 1. Hitung di dalam "calculated_values":
-   - Rentang Berat Ideal & BMI (standar WHO Asia-Pasifik: batas normal 18.5 - 22.9 kg/m²).
+   - Rentang Berat Ideal & BMI (standar WHO Asia-Pasifik: normal 18.5 - 22.9 kg/m²).
    - Persentase Lemak Tubuh (Metode US Navy) beserta fatMassKg dan leanMassKg.
    - Waist-to-Hip Ratio (WHR = pinggang / pinggul).
-   - BMR (Mifflin-St Jeor), TDEE sesuai faktor aktivitas (sedentary=1.2, light=1.375, moderate=1.55, active=1.725), dan Target Kalori Harian sesuai tujuan (fat_loss = defisit 400 kkal dari TDEE namun wajib mematuhi BMR Guard yaitu tidak boleh di bawah BMR; maintenance = TDEE; muscle_gain = surplus 300 kkal dari TDEE).
-   - Makronutrien (proteinGrams, carbGrams, fatGrams) di mana (proteinGrams * 4) + (carbGrams * 4) + (fatGrams * 9) tepat sama dengan targetCalories.
+   - BMR (Mifflin-St Jeor), TDEE sesuai faktor aktivitas (sedentary=1.2, light=1.375, moderate=1.55, active=1.725), dan Target Kalori Harian (fat_loss = defisit 400 kkal dari TDEE namun wajib mematuhi BMR Guard agar tidak di bawah BMR; maintenance = TDEE; muscle_gain = surplus 300 kkal dari TDEE).
+   - Makronutrien (proteinGrams, carbGrams, fatGrams) dengan (proteinGrams * 4) + (carbGrams * 4) + (fatGrams * 9) = targetCalories.
    - Kebutuhan air harian (waterLiters).
 2. Di dalam "dynamic_analysis":
-   - Sediakan 5 langkah rumus di "formulaBreakdown" (BMI & Berat Ideal, % Lemak US Navy, WHR, BMR Mifflin-St Jeor, TDEE & Makronutrien) lengkap dengan substitusi angka nyata pengguna.
-   - Susun "weeklyMeals" WAJIB lengkap 7 hari berurutan ("Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu"), masing-masing 4 waktu makan dengan menu lokal Indonesia yang variatif dan sesuai anggaran.
-   - Susun "weeklyWorkouts" WAJIB lengkap 7 hari berurutan ("Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu").`;
+   - Sediakan 5 langkah rumus di "formulaBreakdown" (BMI & Berat Ideal, % Lemak US Navy, WHR, BMR Mifflin-St Jeor, TDEE & Makronutrien) lengkap dengan substitusi angka pengguna.
+   - Susun jadwal makan dan jadwal olahraga lokal Indonesia yang realistis, hemat token, padat informasi, dan sesuai anggaran.`;
 
-const CHAT_SYSTEM_INSTRUCTION = `Anda adalah "NutriCoach AI", model LLM pakar gizi klinis, antropometri, dan kebugaran dari sistem NutriFit AI Indonesia.
-Berinteraksilah secara luwes, cerdas, empatik, dan mendalam layaknya model LLM tingkat lanjut yang menguasai penuh topik nutrisi dan olahraga:
-1. Gunakan data biometrik pengguna sebagai konteks utama. Jika pengguna meminta pembaruan menu berdasarkan bahan makanan yang mereka miliki (misalnya hanya punya beras, tempe, telur, kol), langsung racikkan jadwal/rekomendasi menu yang lezat, realistis, lengkap dengan takaran gramasi dan perhitungan kalori/proteinnya secara real-time.
-2. Jika pengguna bertanya tentang penyesuaian target atau perhitungan, hitung langsung secara matematis dan jelaskan alasannya secara natural tanpa bahasa kaku.
-3. Format jawaban menggunakan Markdown yang rapi:
-   - Gunakan subjudul "### " untuk memisahkan bagian penting.
-   - Gunakan **Tabel Markdown** saat menampilkan daftar menu, pembagian porsi, atau jadwal latihan.
-   - Jika menampilkan rumus atau rincian perhitungan matematika, tuliskan pada baris khusus diawali "> RUMUS: " dengan simbol bersih (×, ÷, +, -, =).`;
+const REMAINING_DAYS_SYSTEM_INSTRUCTION = `Anda adalah Ahli Gizi Klinis dan Pelatih Fisik NutriFit AI Indonesia.
+Lanjutkan penyusunan jadwal makan dan latihan untuk 6 hari berikutnya ("Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu") agar konsisten dengan target kalori & makronutrien pengguna, dengan variasi menu lokal Indonesia yang berbeda setiap harinya.`;
 
-async function callGeminiFullAi(
-  rawApiKeyEnv: string,
+const CHAT_SYSTEM_INSTRUCTION = `Anda adalah "NutriCoach AI", pakar gizi klinis, antropometri, dan kebugaran dari NutriFit AI Indonesia.
+Jawablah pertanyaan pengguna secara luwes, cerdas, empatik, dan langsung ke inti permasalahan menggunakan data biometrik pengguna sebagai acuan utama.
+Jika pengguna meminta perubahan menu berdasarkan bahan yang tersedia atau menghitung ulang kalori/makro, langsung hitung secara matematis dan sajikan dengan format Markdown yang rapi (subjudul "### ", Tabel Markdown untuk menu/jadwal, dan baris "> RUMUS: " untuk perhitungan).`;
+
+// ============================================================================
+// ENGINE 1: FAST NON-STREAMING (JSON / TEXT) + GROQ FAILOVER
+// ============================================================================
+const GEMINI_FAST_MODELS = [
+  'gemini-3.5-flash-lite',
+  'gemini-3.5-flash',
+  'gemini-2.5-flash',
+];
+
+async function callFastAiEngine(
+  rawGeminiEnv: string,
   systemInstruction: string,
   userPrompt: string,
   expectJson: boolean
 ): Promise<string> {
-  const apiKeys = parseApiKeys(rawApiKeyEnv);
-  if (apiKeys.length === 0) {
+  const geminiKeys = parseGeminiKeys(rawGeminiEnv);
+  const groqKey = sanitizeKey(process.env.GROQ_API_KEY);
+
+  if (geminiKeys.length === 0 && !groqKey) {
     throw new Error(
-      'GEMINI_API_KEY belum diisi atau tidak valid di .env.local.'
+      'GEMINI_API_KEY belum dikonfigurasi di .env.local atau Environment Variables.'
     );
   }
 
-  const models = [
-    'gemini-3.8-flash',
-    'gemini-3.5-flash-lite',
-  ];
-
   const errorLogs: string[] = [];
-  const baseUrl = [
+  const geminiBaseUrl = [
     'https:',
     '',
     'generativelanguage.googleapis.com',
@@ -217,98 +254,319 @@ async function callGeminiFullAi(
     'models',
   ].join('/');
 
-  for (const currentKey of apiKeys) {
-    for (const modelName of models) {
-      for (let attempt = 1; attempt <= 2; attempt++) {
-        try {
-          const endpoint =
-            baseUrl +
-            '/' +
-            encodeURIComponent(modelName.trim()) +
-            ':generateContent?key=' +
-            encodeURIComponent(currentKey);
+  for (const currentKey of geminiKeys) {
+    for (const modelName of GEMINI_FAST_MODELS) {
+      try {
+        const endpoint =
+          geminiBaseUrl +
+          '/' +
+          encodeURIComponent(modelName) +
+          ':generateContent?key=' +
+          encodeURIComponent(currentKey);
 
-          const res = await fetch(endpoint, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              system_instruction: {
-                parts: [{ text: systemInstruction }],
-              },
-              contents: [
-                {
-                  role: 'user',
-                  parts: [{ text: String(userPrompt) }],
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            system_instruction: {
+              parts: [{ text: systemInstruction }],
+            },
+            contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+            generationConfig: expectJson
+              ? {
+                  temperature: 0.55,
+                  topP: 0.9,
+                  maxOutputTokens: 6144,
+                  responseMimeType: 'application/json',
+                }
+              : {
+                  temperature: 0.7,
+                  topP: 0.95,
+                  maxOutputTokens: 3072,
                 },
-              ],
-              generationConfig: expectJson
-                ? {
-                    temperature: 0.6,
-                    topP: 0.92,
-                    maxOutputTokens: 8192,
-                    responseMimeType: 'application/json',
-                  }
-                : {
-                    temperature: 0.7,
-                    topP: 0.95,
-                    maxOutputTokens: 4096,
-                  },
-            }),
-          });
+          }),
+        });
 
-          const data = await res.json();
-          const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        const data = await res.json();
+        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
 
-          if (res.ok && text) {
-            return text;
-          }
-
-          const errMessage =
-            data?.error?.message || `Status HTTP ${String(res.status)}`;
-          errorLogs.push(`${modelName}: ${errMessage}`);
-
-          if ((res.status === 429 || res.status === 503) && attempt === 1) {
-            await delay(1200);
-            continue;
-          }
-
-          break;
-        } catch (err: unknown) {
-          const msg =
-            err instanceof Error ? err.message : 'Gagal menghubungi endpoint';
-          errorLogs.push(`${modelName}: ${msg}`);
-          break;
+        if (res.ok && text) {
+          return text;
         }
+
+        const msg = data?.error?.message || `HTTP ${res.status}`;
+        errorLogs.push(`${modelName}: ${msg}`);
+
+        if (res.status === 400 || res.status === 403) {
+          break; // Key invalid, langsung pindah ke key berikutnya
+        }
+      } catch (err: unknown) {
+        errorLogs.push(
+          `${modelName}: ${err instanceof Error ? err.message : 'Network error'}`
+        );
       }
     }
   }
 
-  throw new Error(
-    errorLogs[0] || 'Gagal memproses komputasi di server Gemini API.'
-  );
+  // FAILOVER OTOMATIS KE GROQ FREE API (500+ token/detik) JIKA GEMINI LIMIT
+  if (groqKey) {
+    try {
+      const groqEndpoint = [
+        'https:',
+        '',
+        'api.groq.com',
+        'openai',
+        'v1',
+        'chat',
+        'completions',
+      ].join('/');
+
+      const res = await fetch(groqEndpoint, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${groqKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'llama-3.3-70b-versatile',
+          messages: [
+            { role: 'system', content: systemInstruction },
+            { role: 'user', content: userPrompt },
+          ],
+          temperature: expectJson ? 0.5 : 0.7,
+          max_tokens: 4096,
+          ...(expectJson ? { response_format: { type: 'json_object' } } : {}),
+        }),
+      });
+
+      const data = await res.json();
+      const text = data?.choices?.[0]?.message?.content;
+      if (res.ok && text) {
+        return text;
+      }
+      errorLogs.push(`Groq: ${data?.error?.message || `HTTP ${res.status}`}`);
+    } catch (err: unknown) {
+      errorLogs.push(
+        `Groq: ${err instanceof Error ? err.message : 'Network error'}`
+      );
+    }
+  }
+
+  throw new Error(errorLogs[0] || 'Seluruh server AI sedang sibuk.');
 }
 
+// ============================================================================
+// ENGINE 2: REAL-TIME SSE STREAMING UNTUK CHATBOT (< 0.8 DETIK)
+// ============================================================================
+async function createChatSseStream(
+  rawGeminiEnv: string,
+  systemInstruction: string,
+  userPrompt: string
+): Promise<ReadableStream<Uint8Array>> {
+  const geminiKeys = parseGeminiKeys(rawGeminiEnv);
+  const groqKey = sanitizeKey(process.env.GROQ_API_KEY);
+  const encoder = new TextEncoder();
+
+  const geminiBaseUrl = [
+    'https:',
+    '',
+    'generativelanguage.googleapis.com',
+    'v1beta',
+    'models',
+  ].join('/');
+
+  // 1. Coba stream langsung dari Gemini
+  for (const currentKey of geminiKeys) {
+    for (const modelName of GEMINI_FAST_MODELS) {
+      try {
+        const endpoint =
+          geminiBaseUrl +
+          '/' +
+          encodeURIComponent(modelName) +
+          ':streamGenerateContent?alt=sse&key=' +
+          encodeURIComponent(currentKey);
+
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            system_instruction: {
+              parts: [{ text: systemInstruction }],
+            },
+            contents: [{ role: 'user', parts: [{ text: userPrompt }] }],
+            generationConfig: {
+              temperature: 0.7,
+              topP: 0.95,
+              maxOutputTokens: 3072,
+            },
+          }),
+        });
+
+        if (res.ok && res.body) {
+          const upstreamReader = res.body.getReader();
+          const decoder = new TextDecoder();
+
+          return new ReadableStream<Uint8Array>({
+            async start(controller) {
+              let buffer = '';
+              try {
+                while (true) {
+                  const { done, value } = await upstreamReader.read();
+                  if (done) break;
+                  buffer += decoder.decode(value, { stream: true });
+
+                  const lines = buffer.split('\n');
+                  buffer = lines.pop() || '';
+
+                  for (const line of lines) {
+                    const trimmed = line.trim();
+                    if (!trimmed.startsWith('data:')) continue;
+                    const jsonPart = trimmed.slice(5).trim();
+                    if (!jsonPart || jsonPart === '[DONE]') continue;
+
+                    try {
+                      const parsed = JSON.parse(jsonPart);
+                      const chunkText =
+                        parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
+                      if (chunkText) {
+                        controller.enqueue(
+                          encoder.encode(
+                            `data: ${JSON.stringify({ text: chunkText })}\n\n`
+                          )
+                        );
+                      }
+                    } catch {
+                      // Abaikan potongan JSON parsial
+                    }
+                  }
+                }
+                controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+                controller.close();
+              } catch (streamErr) {
+                controller.error(streamErr);
+              }
+            },
+          });
+        }
+      } catch {
+        // Lanjut ke model/key berikutnya
+      }
+    }
+  }
+
+  // 2. Failover Stream ke Groq Free API jika Gemini terkena limit 429
+  if (groqKey) {
+    const groqEndpoint = [
+      'https:',
+      '',
+      'api.groq.com',
+      'openai',
+      'v1',
+      'chat',
+      'completions',
+    ].join('/');
+
+    const res = await fetch(groqEndpoint, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${groqKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: [
+          { role: 'system', content: systemInstruction },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: 0.7,
+        max_tokens: 3072,
+        stream: true,
+      }),
+    });
+
+    if (res.ok && res.body) {
+      const upstreamReader = res.body.getReader();
+      const decoder = new TextDecoder();
+
+      return new ReadableStream<Uint8Array>({
+        async start(controller) {
+          let buffer = '';
+          try {
+            while (true) {
+              const { done, value } = await upstreamReader.read();
+              if (done) break;
+              buffer += decoder.decode(value, { stream: true });
+
+              const lines = buffer.split('\n');
+              buffer = lines.pop() || '';
+
+              for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed.startsWith('data:')) continue;
+                const jsonPart = trimmed.slice(5).trim();
+                if (!jsonPart || jsonPart === '[DONE]') continue;
+
+                try {
+                  const parsed = JSON.parse(jsonPart);
+                  const chunkText = parsed?.choices?.[0]?.delta?.content;
+                  if (chunkText) {
+                    controller.enqueue(
+                      encoder.encode(
+                        `data: ${JSON.stringify({ text: chunkText })}\n\n`
+                      )
+                    );
+                  }
+                } catch {
+                  // Abaikan potongan parsial
+                }
+              }
+            }
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+            controller.close();
+          } catch (streamErr) {
+            controller.error(streamErr);
+          }
+        },
+      });
+    }
+  }
+
+  throw new Error('Kuota AI sedang penuh. Silakan coba beberapa saat lagi.');
+}
+
+// ============================================================================
+// ROUTE HANDLER UTAMA
+// ============================================================================
 export async function POST(request: Request) {
   try {
-    const rawApiKeyEnv = process.env.GEMINI_API_KEY || '';
+    const rawGeminiEnv = process.env.GEMINI_API_KEY || '';
     const body = await request.json();
 
     const {
       mode,
+      planScope = 'full',
       rawInput,
       computedBiometrics,
       customPreference,
+      mondaySummary,
       messages,
       userMessage,
+      stream = false,
     } = body as {
       mode: 'generate_plan' | 'chat';
+      planScope?: 'initial' | 'remaining_days' | 'full';
       rawInput: RawUserBiometricInput;
       computedBiometrics?: AiComputedBiometrics;
       customPreference?: string;
+      mondaySummary?: string;
       messages?: { role: 'user' | 'assistant'; content: string }[];
       userMessage?: string;
+      stream?: boolean;
     };
 
+    // =========================================================================
+    // MODE 1: GENERATE PLAN (MENDUKUNG PROGRESSIVE LOADING 2 TAHAP & CACHE)
+    // =========================================================================
     if (mode === 'generate_plan') {
       if (!rawInput) {
         return NextResponse.json(
@@ -317,19 +575,92 @@ export async function POST(request: Request) {
         );
       }
 
-      const userPrompt = `Data Mentah Pengguna:
-${JSON.stringify(
-  {
-    ...rawInput,
-    customPreference:
-      customPreference ||
-      'Tidak ada alergi khusus, prioritaskan bahan makanan lokal Indonesia yang mudah didapat dan bervariasi setiap hari',
-  },
-  null,
-  2
-)}
+      const normalizedPref = (customPreference || '').trim();
+      const cacheKey = JSON.stringify({
+        planScope,
+        rawInput,
+        pref: normalizedPref,
+      });
 
-Hitung seluruh metrik biometrik dan susun program 7 hari penuh (Senin s.d. Minggu) dalam format JSON valid sesuai skema berikut:
+      const cached = getCachedPlan(cacheKey);
+      if (cached) {
+        return NextResponse.json(cached);
+      }
+
+      // TAHAP 2 (LATAR BELAKANG): Melengkapi Selasa - Minggu
+      if (planScope === 'remaining_days') {
+        const remainingPrompt = `Data Pengguna:
+${JSON.stringify(rawInput)}
+Target Nutrisi Terhitung:
+${JSON.stringify(computedBiometrics || {})}
+Preferensi: "${normalizedPref || 'Kuliner lokal Indonesia sehat & variatif'}"
+Menu Hari Senin (jangan diulang): "${mondaySummary || '-'}"
+
+Susun jadwal makan dan jadwal latihan untuk 6 hari ("Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu") dalam JSON valid:
+{
+  "weeklyMeals": [
+    {
+      "day": "Selasa",
+      "costEstimate": "Rp35.000",
+      "dailyTip": "Tips singkat",
+      "meals": [
+        { "time": "Sarapan (07.00)", "title": "Nama Menu", "portionDesc": "Takaran porsi", "kcalShare": 500, "proteinGrams": 30 }
+      ]
+    }
+  ],
+  "weeklyWorkouts": [
+    {
+      "day": "Selasa",
+      "focus": "Fokus Latihan",
+      "duration": "35 Menit",
+      "intensity": "Moderat",
+      "isRest": false,
+      "exercises": ["Gerakan — set x repetisi"]
+    }
+  ]
+}`;
+
+        const rawRemaining = await callFastAiEngine(
+          rawGeminiEnv,
+          REMAINING_DAYS_SYSTEM_INSTRUCTION,
+          remainingPrompt,
+          true
+        );
+
+        const parsedRemaining = JSON.parse(cleanJsonString(rawRemaining)) as {
+          weeklyMeals?: AiDayMealPlan[];
+          weeklyWorkouts?: AiDayWorkout[];
+        };
+
+        const remainingPayload = {
+          weeklyMeals: Array.isArray(parsedRemaining.weeklyMeals)
+            ? parsedRemaining.weeklyMeals
+            : [],
+          weeklyWorkouts: Array.isArray(parsedRemaining.weeklyWorkouts)
+            ? parsedRemaining.weeklyWorkouts
+            : [],
+        };
+
+        setCachedPlan(cacheKey, remainingPayload);
+        return NextResponse.json(remainingPayload);
+      }
+
+      // TAHAP 1 ('initial' = Cepat ~2.5 detik hanya Senin) atau 'full' (7 hari sekaligus)
+      const isInitialOnly = planScope === 'initial';
+      const daysInstruction = isInitialOnly
+        ? 'Susun HANYA 1 hari pertama yaitu "Senin" di dalam array "weeklyMeals" (4 waktu makan) dan "weeklyWorkouts" agar respons super cepat.'
+        : 'Susun lengkap 7 hari berurutan ("Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu") di dalam "weeklyMeals" dan "weeklyWorkouts".';
+
+      const userPrompt = `Data Mentah Pengguna:
+${JSON.stringify({
+  ...rawInput,
+  customPreference:
+    normalizedPref ||
+    'Kuliner lokal Indonesia yang mudah didapat, bergizi, dan sesuai anggaran',
+})}
+
+${daysInstruction}
+Kembalikan HANYA JSON valid sesuai skema berikut:
 {
   "calculated_values": {
     "idealWeightMinKg": 0,
@@ -351,17 +682,17 @@ Hitung seluruh metrik biometrik dan susun program 7 hari penuh (Senin s.d. Mingg
     "waterLiters": 0
   },
   "dynamic_analysis": {
-    "aiSummaryNote": "Penjelasan analisis mendalam mengapa angka-angka tersebut muncul untuk tubuh pengguna",
+    "aiSummaryNote": "Ringkasan analisis spesifik 2-3 kalimat mengapa angka-angka ini muncul",
     "bmiCategory": "Kategori BMI WHO Asia-Pasifik",
-    "weightAdvice": "Strategi spesifik berdasarkan selisih berat badan",
-    "whrStatus": "Status risiko viseral berdasarkan rasio pinggang-pinggul",
+    "weightAdvice": "Saran spesifik berdasarkan selisih berat badan",
+    "whrStatus": "Status risiko viseral",
     "bmrGuardExplanation": "Penjelasan keamanan target kalori terhadap BMR",
-    "sleepAssessment": "Evaluasi klinis durasi tidur pengguna",
+    "sleepAssessment": "Evaluasi klinis jam tidur",
     "formulaBreakdown": [
       {
         "parameter": "Nama Parameter",
-        "formulaName": "Nama Rumus Ilmiah",
-        "equation": "Persamaan Matematika",
+        "formulaName": "Nama Rumus",
+        "equation": "Persamaan",
         "substitution": "Substitusi angka pengguna",
         "result": "Hasil Akhir"
       }
@@ -369,13 +700,13 @@ Hitung seluruh metrik biometrik dan susun program 7 hari penuh (Senin s.d. Mingg
     "weeklyMeals": [
       {
         "day": "Senin",
-        "costEstimate": "Estimasi biaya harian",
-        "dailyTip": "Tips spesifik hari tersebut",
+        "costEstimate": "Estimasi biaya",
+        "dailyTip": "Tips singkat",
         "meals": [
           {
             "time": "Sarapan (07.00)",
             "title": "Nama Menu",
-            "portionDesc": "Rincian porsi gram/rumah tangga",
+            "portionDesc": "Takaran porsi",
             "kcalShare": 0,
             "proteinGrams": 0
           }
@@ -389,17 +720,17 @@ Hitung seluruh metrik biometrik dan susun program 7 hari penuh (Senin s.d. Mingg
         "duration": "Durasi",
         "intensity": "Intensitas",
         "isRest": false,
-        "exercises": ["Nama gerakan — set x repetisi"]
+        "exercises": ["Gerakan — set x repetisi"]
       }
     ]
   }
 }`;
 
-      const rawAiText = await callGeminiFullAi(
-        rawApiKeyEnv,
+      const rawAiText = await callFastAiEngine(
+        rawGeminiEnv,
         PLAN_SYSTEM_INSTRUCTION,
         userPrompt,
-        true // Parameter ke-4 bernilai true agar dashboard menerima struktur JSON
+        true
       );
 
       const parsed = JSON.parse(
@@ -413,9 +744,11 @@ Hitung seluruh metrik biometrik dan susun program 7 hari penuh (Senin s.d. Mingg
         throw new Error('Struktur JSON dari AI tidak lengkap.');
       }
 
-      const responsePayload: AiGeneratedProgram & FullAiStructuredOutput = {
+      const responsePayload: AiGeneratedProgram &
+        FullAiStructuredOutput & { isPartialPlan?: boolean } = {
         calculated_values: calc,
         dynamic_analysis: analysis,
+        isPartialPlan: isInitialOnly,
         aiSummaryNote: analysis.aiSummaryNote,
         biometrics: {
           ...calc,
@@ -440,9 +773,13 @@ Hitung seluruh metrik biometrik dan susun program 7 hari penuh (Senin s.d. Mingg
         }),
       };
 
+      setCachedPlan(cacheKey, responsePayload);
       return NextResponse.json(responsePayload);
     }
 
+    // =========================================================================
+    // MODE 2: CHATBOT (MENDUKUNG REAL-TIME STREAMING & JSON FALLBACK)
+    // =========================================================================
     if (mode === 'chat') {
       const cleanQuestion = (userMessage || '').trim();
       if (!cleanQuestion) {
@@ -453,35 +790,49 @@ Hitung seluruh metrik biometrik dan susun program 7 hari penuh (Senin s.d. Mingg
       }
 
       const historyTranscript = (messages || [])
-        .slice(-8)
+        .slice(-6)
         .map(
           (m) =>
             `${m.role === 'user' ? 'Pengguna' : 'NutriCoach AI'}: ${m.content}`
         )
         .join('\n');
 
-      const chatContextPrompt = `Data Mentah Biometrik Pengguna:
-${JSON.stringify(rawInput, null, 2)}
+      const chatContextPrompt = `Data Biometrik Pengguna:
+${JSON.stringify(rawInput)}
 
 Metrik Hasil Perhitungan Saat Ini:
-${JSON.stringify(computedBiometrics || {}, null, 2)}
+${JSON.stringify(computedBiometrics || {})}
 
 Riwayat Percakapan:
 ${historyTranscript || 'Belum ada percakapan sebelumnya.'}
 
-Pertanyaan / Permintaan Pengguna Saat Ini:
+Pertanyaan Pengguna Saat Ini:
 "${cleanQuestion}"`;
 
-      const replyMarkdown = await callGeminiFullAi(
-        rawApiKeyEnv,
+      if (stream) {
+        const sseStream = await createChatSseStream(
+          rawGeminiEnv,
+          CHAT_SYSTEM_INSTRUCTION,
+          chatContextPrompt
+        );
+
+        return new Response(sseStream, {
+          headers: {
+            'Content-Type': 'text/event-stream; charset=utf-8',
+            'Cache-Control': 'no-cache, no-transform',
+            Connection: 'keep-alive',
+          },
+        });
+      }
+
+      const replyMarkdown = await callFastAiEngine(
+        rawGeminiEnv,
         CHAT_SYSTEM_INSTRUCTION,
         chatContextPrompt,
-        false // Parameter ke-4 bernilai false agar Chatbot merespons luwes sebagai LLM murni
+        false
       );
 
-      return NextResponse.json({
-        reply: replyMarkdown,
-      });
+      return NextResponse.json({ reply: replyMarkdown });
     }
 
     return NextResponse.json({ error: 'Mode tidak valid.' }, { status: 400 });

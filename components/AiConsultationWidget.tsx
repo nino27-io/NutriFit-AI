@@ -616,6 +616,7 @@ export function AiChatbotPanel({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           mode: 'chat',
+          stream: true,
           rawInput,
           computedBiometrics,
           messages: messages.map((m) => ({
@@ -626,24 +627,98 @@ export function AiChatbotPanel({
         }),
       });
 
-      const data = await res.json();
-      if (!res.ok || !data.reply) {
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
         throw new Error(
-          data.error || 'Gagal mendapatkan jawaban dari Gemini AI.'
+          errData?.error || 'Gagal mendapatkan jawaban dari Gemini AI.'
         );
       }
 
-      const assistantEntry: ChatMessage = {
-        id: `ai-${Date.now()}`,
-        role: 'assistant',
-        content: data.reply,
-        timestamp: new Date().toLocaleTimeString('id-ID', {
+      const contentType = res.headers.get('content-type') || '';
+
+      if (contentType.includes('text/event-stream') && res.body) {
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        const assistantId = `ai-${Date.now()}`;
+        const assistantTimestamp = new Date().toLocaleTimeString('id-ID', {
           hour: '2-digit',
           minute: '2-digit',
-        }),
-      };
+        });
 
-      setMessages((prev) => [...prev, assistantEntry]);
+        let accumulatedText = '';
+        let buffer = '';
+        let isBubbleCreated = false;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data:')) continue;
+            const payload = trimmed.slice(5).trim();
+            if (!payload || payload === '[DONE]') continue;
+
+            try {
+              const parsed = JSON.parse(payload) as { text?: string };
+              if (parsed.text) {
+                accumulatedText += parsed.text;
+
+                if (!isBubbleCreated) {
+                  isBubbleCreated = true;
+                  setIsLoading(false);
+                  setMessages((prev) => [
+                    ...prev,
+                    {
+                      id: assistantId,
+                      role: 'assistant',
+                      content: accumulatedText,
+                      timestamp: assistantTimestamp,
+                    },
+                  ]);
+                } else {
+                  setMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === assistantId
+                        ? { ...m, content: accumulatedText }
+                        : m
+                    )
+                  );
+                }
+              }
+            } catch {
+              // Abaikan potongan JSON parsial antar-chunk
+            }
+          }
+        }
+
+        if (!accumulatedText.trim()) {
+          throw new Error('Server AI tidak mengembalikan teks balasan.');
+        }
+      } else {
+        const data = await res.json();
+        if (!data.reply) {
+          throw new Error(
+            data.error || 'Gagal mendapatkan jawaban dari Gemini AI.'
+          );
+        }
+
+        const assistantEntry: ChatMessage = {
+          id: `ai-${Date.now()}`,
+          role: 'assistant',
+          content: data.reply,
+          timestamp: new Date().toLocaleTimeString('id-ID', {
+            hour: '2-digit',
+            minute: '2-digit',
+          }),
+        };
+
+        setMessages((prev) => [...prev, assistantEntry]);
+      }
     } catch (err: unknown) {
       const msg =
         err instanceof Error
@@ -670,7 +745,7 @@ export function AiChatbotPanel({
                 </h3>
                 <span className="inline-flex items-center gap-1 rounded-full bg-[#38D46A]/20 px-2.5 py-0.5 text-[10px] font-extrabold text-[#38D46A]">
                   <CheckCircle2 className="h-3 w-3" />
-                  <span>100% Live Gemini AI</span>
+                  <span>100% Live NutriCoach AI</span>
                 </span>
               </div>
               <p className="text-xs text-[#E0F2FE]">
