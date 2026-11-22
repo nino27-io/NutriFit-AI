@@ -5,7 +5,6 @@ import {
   ShieldCheck,
   Lock,
   Sparkles,
-  CheckCircle2,
   X,
   History,
   LogOut,
@@ -15,6 +14,10 @@ import {
   Calendar,
   AlertCircle,
   Ticket,
+  RefreshCw,
+  Download,
+  Clock,
+  MessageCircle,
 } from 'lucide-react';
 import {
   UserTier,
@@ -24,10 +27,8 @@ import {
   AuthTierController,
 } from '@/lib/authTierService';
 import {
-  SubscriptionPlanId,
-  SUBSCRIPTION_PLAN_LIST,
-  STARTING_PRICE_TEXT,
   getSubscriptionPlan,
+  SubscriptionPlanId,
 } from '@/lib/subscriptionConfig';
 
 const USED_COUPONS_STORAGE_KEY = 'nutrifit_used_coupons_v2';
@@ -37,8 +38,10 @@ function getLocalUsedCoupons(): Record<string, string> {
   try {
     const raw = localStorage.getItem(USED_COUPONS_STORAGE_KEY);
     if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === 'object' ? parsed : {};
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === 'object'
+      ? (parsed as Record<string, string>)
+      : {};
   } catch {
     return {};
   }
@@ -51,8 +54,95 @@ function markCouponUsedLocally(code: string, email: string): void {
     current[code] = email;
     localStorage.setItem(USED_COUPONS_STORAGE_KEY, JSON.stringify(current));
   } catch {
-    // Abaikan jika storage penuh
+    // Abaikan jika localStorage penuh
   }
+}
+
+interface NormalizedUiPlan {
+  id: SubscriptionPlanId;
+  title: string;
+  priceFormatted: string;
+  durationDays: number;
+  durationText: string;
+  badge?: string;
+}
+
+function getNormalizedUiPlan(planId: SubscriptionPlanId): NormalizedUiPlan {
+  const raw = getSubscriptionPlan(planId) as unknown as Record<string, unknown>;
+
+  const rawPrice =
+    raw.price ?? raw.priceIdr ?? raw.priceIDR ?? raw.amount ?? raw.cost;
+  const fallbackPrice = planId === 'monthly' ? 15900 : 5900;
+  const numericPrice =
+    typeof rawPrice === 'number' && rawPrice > 0
+      ? Math.round(rawPrice)
+      : fallbackPrice;
+
+  const priceFormatted =
+    typeof raw.priceFormatted === 'string' && raw.priceFormatted
+      ? raw.priceFormatted
+      : `Rp${numericPrice.toLocaleString('id-ID')}`;
+
+  const title =
+    typeof raw.title === 'string' && raw.title
+      ? raw.title
+      : typeof raw.name === 'string' && raw.name
+        ? raw.name
+        : planId === 'monthly'
+          ? 'Paket Bulanan'
+          : 'Paket Mingguan';
+
+  const durationDays =
+    typeof raw.durationDays === 'number' && raw.durationDays > 0
+      ? raw.durationDays
+      : planId === 'monthly'
+        ? 30
+        : 7;
+
+  const durationText =
+    typeof raw.durationText === 'string' && raw.durationText
+      ? raw.durationText
+      : `${durationDays} Hari Akses Penuh`;
+
+  const badge =
+    typeof raw.badge === 'string' && raw.badge ? raw.badge : undefined;
+
+  return {
+    id: planId,
+    title,
+    priceFormatted,
+    durationDays,
+    durationText,
+    badge,
+  };
+}
+
+function getSafeUserPicture(user: GoogleAccountProfile | null): string | null {
+  if (!user) return null;
+  const raw = user as unknown as Record<string, unknown>;
+  return typeof raw.picture === 'string' && raw.picture ? raw.picture : null;
+}
+
+function activatePremiumSafe(invoiceLabel: string, durationDays: number): void {
+  const fn = AuthTierController.activatePremiumSubscription as unknown as (
+    invoice: string,
+    days?: number
+  ) => void;
+  fn(invoiceLabel, durationDays);
+}
+
+function normalizeWhatsappNumber(raw?: string): string {
+  const digits = (raw || '').replace(/[^\d]/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('0')) return `62${digits.slice(1)}`;
+  return digits;
+}
+
+function formatCountdown(secondsLeft: number): string {
+  const safe = Math.max(0, secondsLeft);
+  const mins = Math.floor(safe / 60);
+  const secs = safe % 60;
+  return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
 interface AccountStatusBarProps {
@@ -76,6 +166,8 @@ export function AccountStatusBar({
   onClickLogout,
 }: AccountStatusBarProps) {
   const badge = AccessPolicy.getTierBadgeMeta(tier);
+  const weeklyPlan = getNormalizedUiPlan('weekly');
+  const userPicture = getSafeUserPicture(user);
 
   const [couponCode, setCouponCode] = useState('');
   const [couponLoading, setCouponLoading] = useState(false);
@@ -131,8 +223,8 @@ export function AccountStatusBar({
         text: data.message || 'Kupon berhasil diaktifkan!',
       });
 
-      AuthTierController.activatePremiumSubscription(
-        `Token: ${data.code}`,
+      activatePremiumSafe(
+        `Token: ${String(data.code || normalizedCode)}`,
         Number(data.durationDays) || 30
       );
     } catch {
@@ -150,10 +242,10 @@ export function AccountStatusBar({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-3">
           {user ? (
-            user.picture ? (
+            userPicture ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
-                src={user.picture}
+                src={userPicture}
                 alt={user.name}
                 referrerPolicy="no-referrer"
                 className="h-10 w-10 rounded-full border border-slate-200 object-cover"
@@ -223,7 +315,7 @@ export function AccountStatusBar({
                 className="inline-flex items-center gap-1.5 rounded-full bg-[#05203C] px-4 py-2 text-xs font-extrabold text-[#38D46A] shadow-sm transition hover:bg-[#0B2545]"
               >
                 <Sparkles className="h-3.5 w-3.5" />
-                <span>Berlangganan (Mulai {STARTING_PRICE_TEXT})</span>
+                <span>Beli Premium (Mulai {weeklyPlan.priceFormatted})</span>
               </button>
             </>
           ) : null}
@@ -236,7 +328,7 @@ export function AccountStatusBar({
                 className="inline-flex items-center gap-1.5 rounded-full bg-[#38D46A] px-4 py-2 text-xs font-extrabold text-[#0B2545] shadow-sm transition hover:brightness-95"
               >
                 <Sparkles className="h-3.5 w-3.5" />
-                <span>Upgrade Premium (Mulai {STARTING_PRICE_TEXT})</span>
+                <span>Beli Premium (Mulai {weeklyPlan.priceFormatted})</span>
               </button>
               <button
                 type="button"
@@ -262,7 +354,6 @@ export function AccountStatusBar({
         </div>
       </div>
 
-      {/* KOLOM KODE TOKEN: HANYA MUNCUL JIKA SUDAH LOGIN GOOGLE & BELUM PREMIUM */}
       {user && tier === 'free_registered' ? (
         <div className="mt-3 border-t border-slate-200/80 pt-3">
           <form
@@ -482,9 +573,8 @@ export function GoogleLoginModal({
             <strong className="block font-extrabold text-[#0B4B84]">
               Langkah 1 dari 2: Login Google Diperlukan
             </strong>
-            Anda saat ini berstatus <strong>Pengunjung (Guest)</strong>. Silakan
-            masuk dengan akun Google asli Anda terlebih dahulu agar riwayat dan
-            status langganan Premium terikat ke akun Google Anda.
+            Silakan masuk dengan akun Google asli Anda terlebih dahulu agar
+            riwayat dan status langganan Premium terikat ke akun Google Anda.
           </div>
         ) : (
           <p className="mt-3 text-xs leading-relaxed font-medium text-[#1E293B]">
@@ -503,8 +593,7 @@ export function GoogleLoginModal({
                   NEXT_PUBLIC_GOOGLE_CLIENT_ID Belum Diisi
                 </strong>
                 Masukkan Client ID Google OAuth Anda di file{' '}
-                <code>.env.local</code> lalu jalankan ulang{' '}
-                <code>npm run dev</code>.
+                <code>.env.local</code>.
               </div>
             </div>
           ) : (
@@ -527,13 +616,21 @@ export function GoogleLoginModal({
             {authError}
           </div>
         ) : null}
-
-        <p className="mt-5 text-center text-[11px] font-medium text-slate-500">
-          Autentikasi diamankan langsung oleh Google Identity Services.
-        </p>
       </div>
     </div>
   );
+}
+
+interface ActiveQrisOrderState {
+  merchantRef: string;
+  qrUrl: string;
+  basePriceFormatted: string;
+  totalPriceFormatted: string;
+  uniqueCode: number;
+  planTitle: string;
+  durationDays: number;
+  merchantName: string;
+  expiresAt: string;
 }
 
 interface SubscriptionPaymentModalProps {
@@ -551,9 +648,11 @@ export function SubscriptionPaymentModal({
 }: SubscriptionPaymentModalProps) {
   const [selectedPlanId, setSelectedPlanId] =
     useState<SubscriptionPlanId>('weekly');
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [isVerifyingStatus, setIsVerifyingStatus] = useState(false);
-  const [pendingOrderId, setPendingOrderId] = useState<string | null>(null);
+  const [isGeneratingQris, setIsGeneratingQris] = useState(false);
+  const [isCheckingStatus, setIsCheckingStatus] = useState(false);
+  const [qrisOrder, setQrisOrder] = useState<ActiveQrisOrderState | null>(null);
+  const [secondsLeft, setSecondsLeft] = useState<number>(0);
+  const [isExpired, setIsExpired] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
 
@@ -564,9 +663,178 @@ export function SubscriptionPaymentModal({
     text: string;
   } | null>(null);
 
+  const hasActivatedRef = useRef(false);
+
+  const planOptions: NormalizedUiPlan[] = [
+    getNormalizedUiPlan('weekly'),
+    getNormalizedUiPlan('monthly'),
+  ];
+  const activePlan = getNormalizedUiPlan(selectedPlanId);
+  const adminWhatsapp = normalizeWhatsappNumber(
+    process.env.NEXT_PUBLIC_ADMIN_WHATSAPP
+  );
+
+  // Hitung mundur 15 menit
+  useEffect(() => {
+    if (!isOpen || !qrisOrder?.expiresAt) return;
+
+    const updateTimer = () => {
+      const diffSec = Math.floor(
+        (new Date(qrisOrder.expiresAt).getTime() - Date.now()) / 1000
+      );
+      if (diffSec <= 0) {
+        setSecondsLeft(0);
+        setIsExpired(true);
+      } else {
+        setSecondsLeft(diffSec);
+        setIsExpired(false);
+      }
+    };
+
+    updateTimer();
+    const interval = setInterval(updateTimer, 1000);
+    return () => clearInterval(interval);
+  }, [isOpen, qrisOrder]);
+
+  // Auto-polling status PAID setiap 3 detik dari Supabase
+  useEffect(() => {
+    if (!isOpen || !qrisOrder?.merchantRef || isExpired) return;
+    hasActivatedRef.current = false;
+
+    const pollTimer = setInterval(async () => {
+      if (hasActivatedRef.current) return;
+      try {
+        const res = await fetch(
+          `/api/checkout?merchantRef=${encodeURIComponent(
+            qrisOrder.merchantRef
+          )}`,
+          { cache: 'no-store' }
+        );
+        const data = await res.json();
+
+        if (data?.paid && !hasActivatedRef.current) {
+          hasActivatedRef.current = true;
+          clearInterval(pollTimer);
+          onConfirmPayment(
+            `${qrisOrder.planTitle} (${qrisOrder.totalPriceFormatted}) • QRIS [${qrisOrder.merchantRef}]`,
+            qrisOrder.durationDays
+          );
+        } else if (data?.status === 'EXPIRED') {
+          setIsExpired(true);
+          clearInterval(pollTimer);
+        }
+      } catch {
+        // Coba lagi di siklus polling berikutnya
+      }
+    }, 3000);
+
+    return () => clearInterval(pollTimer);
+  }, [isOpen, qrisOrder, isExpired, onConfirmPayment]);
+
   if (!isOpen || !user) return null;
 
-  const activePlan = getSubscriptionPlan(selectedPlanId);
+  const handleGenerateQris = async () => {
+    setIsGeneratingQris(true);
+    setErrorMessage(null);
+    setInfoMessage(null);
+    setIsExpired(false);
+    hasActivatedRef.current = false;
+
+    try {
+      const res = await fetch('/api/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: user.name,
+          email: user.email,
+          planId: activePlan.id,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data?.qrUrl) {
+        throw new Error(data?.error || 'Gagal membuat kode QRIS Dinamis.');
+      }
+
+      setQrisOrder({
+        merchantRef: String(data.merchantRef),
+        qrUrl: String(data.qrUrl),
+        basePriceFormatted: String(
+          data.basePriceFormatted || activePlan.priceFormatted
+        ),
+        totalPriceFormatted: String(
+          data.totalPriceFormatted || activePlan.priceFormatted
+        ),
+        uniqueCode: Number(data.uniqueCode) || 0,
+        planTitle: String(data.planTitle || activePlan.title),
+        durationDays: Number(data.durationDays) || activePlan.durationDays,
+        merchantName: String(data.merchantName || 'NutriFit AI'),
+        expiresAt: String(data.expiresAt),
+      });
+    } catch (err: unknown) {
+      setErrorMessage(
+        err instanceof Error
+          ? err.message
+          : 'Terjadi gangguan saat memuat kode QRIS.'
+      );
+    } finally {
+      setIsGeneratingQris(false);
+    }
+  };
+
+  const handleCheckPaymentNow = async () => {
+    if (!qrisOrder?.merchantRef) return;
+    setIsCheckingStatus(true);
+    setErrorMessage(null);
+    setInfoMessage(null);
+
+    try {
+      const res = await fetch(
+        `/api/checkout?merchantRef=${encodeURIComponent(
+          qrisOrder.merchantRef
+        )}`,
+        { cache: 'no-store' }
+      );
+      const data = await res.json();
+
+      if (data?.paid) {
+        hasActivatedRef.current = true;
+        onConfirmPayment(
+          `${qrisOrder.planTitle} (${qrisOrder.totalPriceFormatted}) • QRIS [${qrisOrder.merchantRef}]`,
+          qrisOrder.durationDays
+        );
+        return;
+      }
+
+      if (data?.status === 'EXPIRED') {
+        setIsExpired(true);
+        setInfoMessage(
+          'Masa berlaku kode QRIS telah habis. Silakan buat kode QRIS baru.'
+        );
+        return;
+      }
+
+      setInfoMessage(
+        'Pembayaran belum masuk. Setelah transfer berhasil, status akun Anda akan berubah menjadi Premium secara otomatis dalam beberapa detik.'
+      );
+    } catch {
+      setErrorMessage('Gagal memeriksa status transaksi ke server.');
+    } finally {
+      setIsCheckingStatus(false);
+    }
+  };
+
+  const buildFallbackHelpUrl = (): string => {
+    if (!qrisOrder) return '#';
+    const message = [
+      'Halo Admin NutriFit AI, saya sudah membayar QRIS namun status belum berubah setelah 1 menit:',
+      `• Email: ${user.email}`,
+      `• Paket: ${qrisOrder.planTitle}`,
+      `• Total Bayar: ${qrisOrder.totalPriceFormatted}`,
+      `• ID Transaksi: ${qrisOrder.merchantRef}`,
+    ].join('\n');
+    return `https://wa.me/${adminWhatsapp}?text=${encodeURIComponent(message)}`;
+  };
 
   const handleModalRedeemCoupon = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -611,8 +879,8 @@ export function SubscriptionPaymentModal({
       markCouponUsedLocally(normalizedCode, user.email);
       setCouponCode('');
       onConfirmPayment(
-        `Token: ${data.code}`,
-        Number(data.durationDays) || 30
+        `Token: ${String(data.code || normalizedCode)}`,
+        Number(data.durationDays) || activePlan.durationDays
       );
     } catch {
       setCouponFeedback({
@@ -621,155 +889,6 @@ export function SubscriptionPaymentModal({
       });
     } finally {
       setCouponLoading(false);
-    }
-  };
-
-  const verifyPaymentWithServer = async (orderIdToVerify: string) => {
-    setIsVerifyingStatus(true);
-    setErrorMessage(null);
-    setInfoMessage(null);
-
-    try {
-      const verifyRes = await fetch('/api/payment/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          orderId: orderIdToVerify,
-          email: user.email,
-        }),
-      });
-
-      const verifyData = await verifyRes.json();
-
-      if (verifyRes.ok && verifyData.verified) {
-        setPendingOrderId(null);
-        setIsVerifyingStatus(false);
-        onConfirmPayment(
-          `${verifyData.planTitle} (${verifyData.priceFormatted}) • QRIS [${verifyData.orderId}]`,
-          verifyData.durationDays
-        );
-        return;
-      }
-
-      setIsVerifyingStatus(false);
-      setInfoMessage(
-        verifyData.message ||
-          'Pembayaran masih menunggu penyelesaian. Jika menggunakan Sandbox, silakan simulasikan pembayaran di Simulator QRIS Midtrans lalu klik tombol Cek Status di bawah.'
-      );
-    } catch {
-      setIsVerifyingStatus(false);
-      setErrorMessage(
-        'Gagal menghubungi server untuk memverifikasi status pembayaran.'
-      );
-    }
-  };
-
-  const triggerMidtransQrisPayment = async () => {
-    setIsProcessing(true);
-    setErrorMessage(null);
-    setInfoMessage(null);
-
-    try {
-      const res = await fetch('/api/payment/snap-token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: user.name,
-          email: user.email,
-          planId: activePlan.id,
-        }),
-      });
-
-      const data = await res.json();
-
-      if (!res.ok || !data.token) {
-        throw new Error(data.error || 'Gagal menyiapkan transaksi QRIS.');
-      }
-
-      setPendingOrderId(data.orderId);
-
-      const snapScriptUrl: string =
-        data.snapScriptUrl ||
-        process.env.NEXT_PUBLIC_MIDTRANS_SNAP_URL ||
-        'https://app.sandbox.midtrans.com/snap/snap.js';
-      const clientKey: string =
-        data.clientKey || process.env.NEXT_PUBLIC_MIDTRANS_CLIENT_KEY || '';
-
-      const loadSnapScript = () => {
-        return new Promise<void>((resolve, reject) => {
-          const existingScript = document.getElementById(
-            'midtrans-snap-script'
-          ) as HTMLScriptElement | null;
-
-          if (existingScript && existingScript.src !== snapScriptUrl) {
-            existingScript.remove();
-            delete (window as unknown as { snap?: unknown }).snap;
-          }
-
-          if (
-            typeof window !== 'undefined' &&
-            (window as unknown as { snap?: unknown }).snap
-          ) {
-            resolve();
-            return;
-          }
-
-          const script = document.createElement('script');
-          script.id = 'midtrans-snap-script';
-          script.src = snapScriptUrl;
-          script.setAttribute('data-client-key', clientKey);
-          script.onload = () => resolve();
-          script.onerror = () =>
-            reject(new Error('Gagal memuat modul Snap Midtrans.'));
-          document.body.appendChild(script);
-        });
-      };
-
-      await loadSnapScript();
-
-      const snapInstance = (
-        window as unknown as {
-          snap: {
-            pay: (
-              token: string,
-              callbacks: {
-                onSuccess: () => void;
-                onPending: () => void;
-                onError: () => void;
-                onClose: () => void;
-              }
-            ) => void;
-          };
-        }
-      ).snap;
-
-      snapInstance.pay(data.token, {
-        onSuccess: function () {
-          setIsProcessing(false);
-          verifyPaymentWithServer(data.orderId);
-        },
-        onPending: function () {
-          setIsProcessing(false);
-          verifyPaymentWithServer(data.orderId);
-        },
-        onError: function () {
-          setIsProcessing(false);
-          setErrorMessage('Pembayaran QRIS gagal atau ditolak.');
-        },
-        onClose: function () {
-          setIsProcessing(false);
-          setInfoMessage(
-            `Pop-up ditutup. Jika Anda sudah memindai dan membayar QRIS (Order ID: ${data.orderId}), tekan tombol "Verifikasi Status Pembayaran" di bawah.`
-          );
-        },
-      });
-    } catch (err: unknown) {
-      setIsProcessing(false);
-      const msg =
-        err instanceof Error
-          ? err.message
-          : 'Terjadi kesalahan saat menghubungi Midtrans.';
-      setErrorMessage(msg);
     }
   };
 
@@ -790,25 +909,31 @@ export function SubscriptionPaymentModal({
         </div>
 
         <h3 className="mt-3 text-2xl font-extrabold tracking-tight text-[#0B2545]">
-          Pilih Paket Langganan Premium
+          Pembayaran QRIS Otomatis
         </h3>
         <p className="mt-1 text-xs font-medium text-[#1E293B]">
-          Status Premium hanya aktif otomatis setelah pembayaran QRIS
-          terverifikasi lunas oleh server Midtrans.
+          Nominal terkunci otomatis. Akun langsung aktif menjadi{' '}
+          <strong>Premium</strong> beberapa detik setelah pembayaran berhasil
+          tanpa perlu konfirmasi manual.
         </p>
 
         <div className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {SUBSCRIPTION_PLAN_LIST.map((plan) => {
+          {planOptions.map((plan) => {
             const isSelected = selectedPlanId === plan.id;
+            const calendarColorClass = isSelected
+              ? 'text-[#38D46A]'
+              : 'text-[#0B4B84]';
+
             return (
               <button
                 key={plan.id}
                 type="button"
                 onClick={() => {
                   setSelectedPlanId(plan.id);
-                  setPendingOrderId(null);
+                  setQrisOrder(null);
                   setInfoMessage(null);
                   setErrorMessage(null);
+                  setIsExpired(false);
                 }}
                 className={`relative flex flex-col justify-between rounded-2xl border-2 p-4 text-left transition ${
                   isSelected
@@ -825,11 +950,7 @@ export function SubscriptionPaymentModal({
                 <div>
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-xs font-extrabold">{plan.title}</span>
-                    <Calendar
-                      className={`h-4 w-4 ${
-                        isSelected ? 'text-[#38D46A]' : 'text-[#0B4B84]'
-                      }`}
-                    />
+                    <Calendar className={`h-4 w-4 ${calendarColorClass}`} />
                   </div>
                   <div
                     className={`mt-1 text-2xl font-extrabold ${
@@ -846,63 +967,135 @@ export function SubscriptionPaymentModal({
                     {plan.durationText}
                   </span>
                 </div>
-
-                <p
-                  className={`mt-2.5 text-[11px] leading-snug ${
-                    isSelected ? 'text-[#E0F2FE]' : 'text-[#1E293B]'
-                  }`}
-                >
-                  {plan.description}
-                </p>
               </button>
             );
           })}
         </div>
 
-        <div className="mt-5 rounded-2xl border border-[#0B4B84]/20 bg-[#EEF5FC] p-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#05203C] text-[#38D46A]">
-                <QrCode className="h-5 w-5" />
-              </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-extrabold text-[#0B2545]">
-                    Metode Pembayaran: QRIS Instan
-                  </span>
-                  <span className="rounded-full bg-[#38D46A] px-2 py-0.5 text-[10px] font-extrabold text-[#0B2545]">
-                    Biaya Admin Rp0
-                  </span>
-                </div>
-                <p className="text-[11px] font-medium text-[#1E293B]">
-                  Mendukung GoPay, DANA, OVO, ShopeePay, & Mobile Banking tanpa
-                  potongan admin.
-                </p>
-              </div>
+        {qrisOrder ? (
+          <div className="mt-5 rounded-2xl border-2 border-[#0B4B84]/25 bg-[#EEF5FC] p-5 text-center">
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-[#05203C] px-3.5 py-1 text-[11px] font-extrabold text-[#38D46A]">
+                <QrCode className="h-3.5 w-3.5" />
+                <span>Total Bayar: {qrisOrder.totalPriceFormatted}</span>
+              </span>
+              <span
+                className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-[11px] font-extrabold ${
+                  isExpired
+                    ? 'bg-rose-100 text-rose-700'
+                    : 'bg-white text-[#0B4B84]'
+                }`}
+              >
+                <Clock className="h-3 w-3" />
+                <span>
+                  {isExpired
+                    ? 'Kedaluwarsa'
+                    : `Sisa ${formatCountdown(secondsLeft)}`}
+                </span>
+              </span>
             </div>
-          </div>
 
-          <div className="mt-3.5 space-y-1 border-t border-slate-200/80 pt-3 text-xs">
-            <div className="flex justify-between font-semibold text-[#1E293B]">
-              <span>
-                Harga {activePlan.title} ({activePlan.durationText})
-              </span>
-              <span>{activePlan.priceFormatted}</span>
+            <p className="mt-2 text-[11px] font-semibold text-[#1E293B]">
+              {qrisOrder.basePriceFormatted} + Rp{qrisOrder.uniqueCode} (kode
+              unik verifikasi otomatis)
+            </p>
+
+            <div className="mx-auto mt-3 flex h-56 w-56 items-center justify-center overflow-hidden rounded-2xl border border-slate-200 bg-white p-3 shadow-md">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={qrisOrder.qrUrl}
+                alt={`QRIS ${qrisOrder.merchantName}`}
+                className={`h-full w-full object-contain ${
+                  isExpired ? 'opacity-25 grayscale' : ''
+                }`}
+              />
             </div>
-            <div className="flex justify-between font-semibold text-[#1E293B]">
-              <span>Biaya Admin QRIS</span>
-              <span className="font-extrabold text-[#0B4B84]">
-                Rp0 (Gratis)
-              </span>
-            </div>
-            <div className="flex justify-between pt-1 text-sm font-extrabold text-[#0B2545]">
-              <span>Total Pembayaran Bersih</span>
-              <span className="text-[#0B4B84]">
-                {activePlan.priceFormatted}
-              </span>
+
+            <p className="mt-2.5 text-xs font-extrabold text-[#0B2545]">
+              Merchant: {qrisOrder.merchantName} • ID: {qrisOrder.merchantRef}
+            </p>
+
+            {!isExpired ? (
+              <div className="mt-2 inline-flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-bold text-emerald-700">
+                <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
+                <span>
+                  Menunggu pembayaran otomatis (halaman jangan ditutup)...
+                </span>
+              </div>
+            ) : null}
+
+            <div className="mt-4 flex flex-col gap-2">
+              {isExpired ? (
+                <button
+                  type="button"
+                  disabled={isGeneratingQris}
+                  onClick={handleGenerateQris}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#38D46A] px-5 py-3 text-xs font-extrabold text-[#0B2545] transition hover:brightness-95"
+                >
+                  <RefreshCw className="h-4 w-4" />
+                  <span>Buat Kode QRIS Baru</span>
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    disabled={isCheckingStatus}
+                    onClick={handleCheckPaymentNow}
+                    className="inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#05203C] px-5 py-3 text-xs font-extrabold text-[#38D46A] transition hover:bg-[#0B2545] disabled:opacity-60"
+                  >
+                    <RefreshCw
+                      className={`h-4 w-4 ${isCheckingStatus ? 'animate-spin' : ''}`}
+                    />
+                    <span>
+                      {isCheckingStatus
+                        ? 'Memeriksa Status...'
+                        : 'Cek Status Pembayaran Sekarang'}
+                    </span>
+                  </button>
+
+                  <a
+                    href={qrisOrder.qrUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    download={`QRIS-${qrisOrder.merchantRef}.png`}
+                    className="inline-flex w-full items-center justify-center gap-1.5 rounded-full border border-slate-300 bg-white px-5 py-2.5 text-xs font-extrabold text-[#0B2545] transition hover:bg-slate-50"
+                  >
+                    <Download className="h-3.5 w-3.5 text-[#0B4B84]" />
+                    <span>Simpan Gambar QRIS</span>
+                  </a>
+                </>
+              )}
+
+              {adminWhatsapp ? (
+                <a
+                  href={buildFallbackHelpUrl()}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-1 inline-flex items-center justify-center gap-1.5 text-[11px] font-bold text-[#0B4B84] hover:underline"
+                >
+                  <MessageCircle className="h-3.5 w-3.5" />
+                  <span>
+                    Sudah bayar tapi belum aktif dalam 1 menit? Hubungi Bantuan
+                  </span>
+                </a>
+              ) : null}
             </div>
           </div>
-        </div>
+        ) : (
+          <button
+            type="button"
+            disabled={isGeneratingQris}
+            onClick={handleGenerateQris}
+            className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#38D46A] px-6 py-3.5 text-sm font-extrabold text-[#0B2545] shadow-lg transition hover:brightness-95 disabled:opacity-60"
+          >
+            <ShieldCheck className="h-5 w-5" />
+            <span>
+              {isGeneratingQris
+                ? 'Menyiapkan Kode QRIS...'
+                : `Bayar dengan QRIS (${activePlan.priceFormatted})`}
+            </span>
+          </button>
+        )}
 
         {infoMessage ? (
           <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-xs font-semibold text-amber-900">
@@ -916,37 +1109,6 @@ export function SubscriptionPaymentModal({
           </div>
         ) : null}
 
-        {pendingOrderId ? (
-          <button
-            type="button"
-            disabled={isVerifyingStatus}
-            onClick={() => verifyPaymentWithServer(pendingOrderId)}
-            className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-full border-2 border-[#05203C] bg-white px-6 py-3 text-xs font-extrabold text-[#05203C] transition hover:bg-[#EEF5FC] disabled:opacity-60"
-          >
-            <CheckCircle2 className="h-4 w-4 text-[#0B4B84]" />
-            <span>
-              {isVerifyingStatus
-                ? 'Memeriksa Status ke Server Midtrans...'
-                : `Verifikasi Status Pembayaran (${pendingOrderId})`}
-            </span>
-          </button>
-        ) : null}
-
-        <button
-          type="button"
-          disabled={isProcessing || isVerifyingStatus}
-          onClick={triggerMidtransQrisPayment}
-          className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#38D46A] px-6 py-3.5 text-sm font-extrabold text-[#0B2545] shadow-lg transition hover:brightness-95 disabled:opacity-60"
-        >
-          <ShieldCheck className="h-5 w-5" />
-          <span>
-            {isProcessing
-              ? 'Menyiapkan Kode QRIS Midtrans...'
-              : `Bayar ${activePlan.priceFormatted} dengan QRIS (Admin Rp0)`}
-          </span>
-        </button>
-
-        {/* INPUT TOKEN DI DALAM MODAL PEMBAYARAN */}
         <div className="mt-5 border-t border-slate-200 pt-4">
           <form onSubmit={handleModalRedeemCoupon} className="space-y-2">
             <label className="block text-xs font-extrabold text-[#0B2545]">
